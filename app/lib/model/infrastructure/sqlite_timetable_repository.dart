@@ -29,11 +29,16 @@ class SqliteTimetableRepository implements TimetableRepository {
           .toList();
 
   @override
-  Future<void> saveSubject(Subject subject) async => _database.insert(
-        'subjects',
-        subject.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+  Future<void> saveSubject(Subject subject) async =>
+      _database.transaction((txn) async {
+        final values = subject.toMap();
+        values.remove('id');
+        final updated = await txn.update('subjects', values,
+            where: 'id = ?', whereArgs: [subject.id]);
+        if (updated == 0) {
+          await txn.insert('subjects', subject.toMap());
+        }
+      });
 
   @override
   Future<void> saveLesson(Lesson lesson) async => _database.insert(
