@@ -16,6 +16,7 @@ import '../model/services/distinct_subject_color_selector.dart';
 import '../util/text_file_download.dart';
 import 'app_palette.dart';
 import 'classviva_login_view.dart';
+import 'debug_metadata_view.dart';
 import 'school_pages.dart';
 
 class HomePage extends StatefulWidget {
@@ -90,6 +91,7 @@ class _HomePageState extends State<HomePage> {
             HomeView(
               timetableController: widget.timetableController,
               schoolDataController: widget.schoolDataController,
+              themeController: widget.themeController,
             ),
             TimetableView(
               controller: widget.timetableController,
@@ -103,8 +105,14 @@ class _HomePageState extends State<HomePage> {
               timetableController: widget.timetableController,
               themeController: widget.themeController,
             ),
-            PerformanceView(controller: widget.schoolDataController),
-            RegisterView(controller: widget.schoolDataController),
+            PerformanceView(
+              controller: widget.schoolDataController,
+              themeController: widget.themeController,
+            ),
+            RegisterView(
+              controller: widget.schoolDataController,
+              themeController: widget.themeController,
+            ),
           ],
         ),
         floatingActionButton: _tab == 1 || _tab == 2
@@ -1309,6 +1317,39 @@ class SettingsView extends StatelessWidget {
                   subtitle: const Text(
                       'Ripristina un file JSON esportato in precedenza.'),
                   onTap: () => _importConfig(context),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 20),
+            const _SettingsSectionHeader(
+                icon: Icons.bug_report_outlined,
+                title: 'Debug',
+                subtitle: 'Strumenti avanzati per diagnosticare problemi',
+                accent: AppPalette.indigo),
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: Column(children: [
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.bug_report_outlined),
+                  title: const Text('Overlay metadati'),
+                  subtitle: const Text(
+                      'Mostra i dati grezzi e quelli ricavati su ogni card e dialog.'),
+                  value: themeController.debugMode,
+                  onChanged: themeController.setDebugMode,
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                ListTile(
+                  leading: const Icon(Icons.data_object),
+                  title: const Text('Metadati ClasseViva'),
+                  subtitle: const Text(
+                      'Mostra tutti i dati grezzi ricevuti e i valori ricavati dall’app (materia abbinata, tag verifica, tipo evento…).'),
+                  onTap: () =>
+                      Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => DebugMetadataView(
+                      timetableController: controller,
+                      schoolDataController: schoolDataController,
+                    ),
+                  )),
                 ),
               ]),
             ),

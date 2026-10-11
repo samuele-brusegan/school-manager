@@ -94,9 +94,12 @@ class SchoolDataController extends ChangeNotifier {
       final now = DateTime.now();
       final schoolYearEnd =
           DateTime(now.month >= 9 ? now.year + 1 : now.year, 8, 31);
+      // Agenda e presenze si caricano dall'inizio dell'anno scolastico:
+      // anche gli eventi/compiti dei giorni passati restano consultabili.
       final start = switch (section) {
-        ClassVivaSection.agenda => DateTime(now.year, now.month, now.day),
-        ClassVivaSection.attendance => DateTime(schoolYearEnd.year - 1, 9, 1),
+        ClassVivaSection.agenda ||
+        ClassVivaSection.attendance =>
+          DateTime(schoolYearEnd.year - 1, 9, 1),
         _ => null,
       };
       final end = section == ClassVivaSection.agenda

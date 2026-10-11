@@ -80,7 +80,43 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
     await _credentialStore.save(
       studentId: student,
       token: token,
+      username: username,
+      password: password,
+      expiresAt: DateTime.tryParse(body['expire']?.toString() ?? ''),
     );
+  }
+
+  /// Sessione valida (studente, token): rinnova il token se scaduto o
+  /// prossimo alla scadenza, riautenticandosi con le credenziali salvate.
+  Future<(String, String)> _session() async {
+    final stored = await _credentialStore.read();
+    _token ??= stored?.$2;
+    _studentId ??= stored?.$1;
+    if (_token != null && _studentId != null) {
+      final expiry = await _credentialStore.readExpiry();
+      final stale = expiry != null &&
+          expiry.isBefore(DateTime.now().add(const Duration(minutes: 1)));
+      if (!stale) return (_studentId!, _token!);
+      _token = null;
+      if (await _reauthenticate()) return (_studentId!, _token!);
+    }
+    throw const ClassVivaException(
+      'Sessione ClasseViva non disponibile: effettua nuovamente l’accesso.',
+    );
+  }
+
+  /// Riprova il login con le credenziali salvate. Falso se non ci sono
+  /// credenziali o il server le rifiuta: l'utente dovrà rifare l'accesso.
+  Future<bool> _reauthenticate() async {
+    final credentials = await _credentialStore.readCredentials();
+    if (credentials == null) return false;
+    try {
+      await signIn(username: credentials.$1, password: credentials.$2);
+      return true;
+    } on Object {
+      _token = null;
+      return false;
+    }
   }
 
   @override
@@ -88,26 +124,24 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
     DateTime start,
     DateTime end,
   ) async {
-    final session = await _credentialStore.read();
-    final token = _token ?? session?.$2;
-    final student = _studentId ?? session?.$1;
-    _token = token;
-    _studentId = student;
-    if (token == null || student == null) {
-      throw const ClassVivaException(
-        'Sessione ClasseViva non disponibile: effettua nuovamente l’accesso.',
-      );
-    }
+    var (student, token) = await _session();
     final startText = _datePath(start);
     final endText = _datePath(end);
     final uri = _baseUri.resolve(
       'v1/students/$student/lessons/$startText/$endText',
     );
-    final response = await _client.get(uri, headers: {
-      ..._headers,
-      'Z-Auth-Token': token
-    }).timeout(const Duration(seconds: 15));
+    Future<http.Response> fetch() =>
+        _client.get(uri, headers: {
+          ..._headers,
+          'Z-Auth-Token': token
+        }).timeout(const Duration(seconds: 15));
+    var response = await fetch();
     _debugResponse('lezioni', response);
+    if (response.statusCode == 401 && await _reauthenticate()) {
+      (student, token) = (_studentId!, _token!);
+      response = await fetch();
+      _debugResponse('lezioni (riautenticata)', response);
+    }
     if (response.statusCode == 401 || response.statusCode == 403) {
       throw const ClassVivaException(
         'ClasseViva ha rifiutato la sessione o non abilita questo account.',
@@ -138,16 +172,7 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
     DateTime? start,
     DateTime? end,
   }) async {
-    final session = await _credentialStore.read();
-    final token = _token ?? session?.$2;
-    final student = _studentId ?? session?.$1;
-    _token = token;
-    _studentId = student;
-    if (token == null || student == null) {
-      throw const ClassVivaException(
-        'Sessione ClasseViva non disponibile: effettua nuovamente l’accesso.',
-      );
-    }
+    var (student, token) = await _session();
 
     final rangePath = start != null && end != null
         ? '/${_datePath(start)}/${_datePath(end)}'
@@ -164,15 +189,24 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
       ClassVivaSection.schoolbooks => 'v1/students/$student/schoolbooks',
     };
     final uri = _baseUri.resolve(path);
-    final headers = {..._headers, 'Z-Auth-Token': token};
-    final response = section == ClassVivaSection.documents
-        ? await _client
-            .post(uri, headers: headers, body: jsonEncode({}))
-            .timeout(const Duration(seconds: 15))
-        : await _client
-            .get(uri, headers: headers)
-            .timeout(const Duration(seconds: 15));
+    Future<http.Response> fetch() {
+      final headers = {..._headers, 'Z-Auth-Token': token};
+      return section == ClassVivaSection.documents
+          ? _client
+              .post(uri, headers: headers, body: jsonEncode({}))
+              .timeout(const Duration(seconds: 15))
+          : _client
+              .get(uri, headers: headers)
+              .timeout(const Duration(seconds: 15));
+    }
+
+    var response = await fetch();
     _debugResponse('registro ${section.name}', response);
+    if (response.statusCode == 401 && await _reauthenticate()) {
+      (student, token) = (_studentId!, _token!);
+      response = await fetch();
+      _debugResponse('registro ${section.name} (riautenticata)', response);
+    }
     if (response.statusCode == 401 || response.statusCode == 403) {
       throw const ClassVivaException(
         'ClasseViva non abilita questa sezione per l’account collegato.',

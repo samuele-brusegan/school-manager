@@ -204,33 +204,102 @@ class SqliteTimetableRepository implements TimetableRepository {
       };
 
   @override
-  Future<void> importConfig(Map<String, Object?> data) =>
-      _database.transaction((txn) async {
-        List<Map<String, Object?>> rowsOf(String key) => [
-              for (final row in (data[key] as List?) ?? const [])
-                (row as Map).cast<String, Object?>(),
-            ];
-        for (final table in const [
-          'lessons',
-          'subjects',
-          'period_times',
-          'classroom_resources',
-        ]) {
-          await txn.delete(table);
-          for (final row in rowsOf(table)) {
-            await txn.insert(table, row);
-          }
+  Future<void> importConfig(Map<String, Object?> data) {
+    List<Map<String, Object?>> rowsOf(String key) {
+      final raw = data[key];
+      if (raw == null) {
+        throw FormatException(
+            'Il file non contiene la sezione "$key": non è un backup valido.');
+      }
+      if (raw is! List) {
+        throw FormatException('La sezione "$key" del file non è valida.');
+      }
+      return [
+        for (final row in raw)
+          (row as Map).cast<String, Object?>(),
+      ];
+    }
+
+    // Tutte le righe vengono validate prima di toccare il database: in caso
+    // di errore i dati attuali restano intatti.
+    final subjectRows = rowsOf('subjects');
+    final lessonRows = rowsOf('lessons');
+    final periodRows = rowsOf('period_times');
+    final resourceRows = rowsOf('classroom_resources');
+
+    final subjects = <Subject>[];
+    for (final row in subjectRows) {
+      try {
+        subjects.add(Subject.fromMap(row));
+      } on Object {
+        throw FormatException(
+            'Una materia nel file non è valida: ${row['name'] ?? row['id']}.');
+      }
+    }
+    final subjectIds = subjects.map((subject) => subject.id).toSet();
+    final lessons = <Lesson>[];
+    for (final row in lessonRows) {
+      final Lesson lesson;
+      try {
+        lesson = Lesson.fromMap(row);
+      } on Object {
+        throw FormatException(
+            'Una lezione nel file non è valida: ${row['id']}.');
+      }
+      if (!subjectIds.contains(lesson.subjectId)) {
+        throw FormatException(
+            'Una lezione fa riferimento a una materia assente nel file.');
+      }
+      lessons.add(lesson);
+    }
+    for (final row in periodRows) {
+      try {
+        PeriodTime.fromMap(row);
+      } on Object {
+        throw FormatException('Una campanella nel file non è valida.');
+      }
+    }
+    for (final row in resourceRows) {
+      try {
+        ClassroomResource.fromMap(row);
+      } on Object {
+        throw FormatException('Una risorsa nel file non è valida.');
+      }
+    }
+
+    return _database.transaction((txn) async {
+      // Le materie vanno inserite prima delle lezioni: subject_id è una
+      // chiave esterna verso subjects e i vincoli FK sono attivi.
+      for (final table in const [
+        'lessons',
+        'subjects',
+        'period_times',
+        'classroom_resources',
+      ]) {
+        await txn.delete(table);
+      }
+      final tables = {
+        'subjects': subjectRows,
+        'lessons': lessonRows,
+        'period_times': periodRows,
+        'classroom_resources': resourceRows,
+      };
+      for (final entry in tables.entries) {
+        for (final row in entry.value) {
+          await txn.insert(entry.key, row);
         }
-        final settings =
-            (data['app_settings'] as Map?)?.cast<String, Object?>() ?? {};
-        for (final entry in settings.entries) {
-          await txn.insert(
-            'app_settings',
-            {'key': entry.key, 'value': '${entry.value}'},
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        }
-      });
+      }
+      final settings =
+          (data['app_settings'] as Map?)?.cast<String, Object?>() ?? {};
+      for (final entry in settings.entries) {
+        await txn.insert(
+          'app_settings',
+          {'key': entry.key, 'value': '${entry.value}'},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
 }
 
 Future<Database> openTimetableDatabase(String path) => openDatabase(

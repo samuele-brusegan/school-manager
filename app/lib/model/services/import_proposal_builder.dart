@@ -13,6 +13,13 @@ class ImportProposalBuilder {
     final subjects = <String, Subject>{
       for (final subject in existing) subject.name.toLowerCase(): subject,
     };
+    // Il match principale avviene sull'ID numerico di ClasseViva: il nome
+    // remoto cambia facilmente (es. materia rinominata "GPOI"), l'ID no.
+    final remoteSubjects = <String, Subject>{
+      for (final subject in existing)
+        if (subject.classvivaId.trim().isNotEmpty)
+          subject.classvivaId.trim(): subject,
+    };
     final usedIds = existing.map((subject) => subject.id).toSet();
     final lessons = <Lesson>[];
     final warnings = <String>[];
@@ -96,7 +103,11 @@ class ImportProposalBuilder {
         continue;
       }
       final key = name.toLowerCase();
-      final subject = subjects.putIfAbsent(
+      final remoteId = item.subjectId?.trim();
+      var subject = remoteId != null && remoteId.isNotEmpty
+          ? remoteSubjects[remoteId]
+          : null;
+      subject ??= subjects.putIfAbsent(
         key,
         () {
           var id = 'cv-${Uri.encodeComponent(key)}';
@@ -108,12 +119,17 @@ class ImportProposalBuilder {
           return Subject(
             id: id,
             name: name,
-            classvivaId: item.subjectId?.trim().isNotEmpty == true
-                ? item.subjectId!.trim()
-                : name,
+            classvivaId:
+                remoteId != null && remoteId.isNotEmpty ? remoteId : name,
           );
         },
       );
+      // La materia riconosciuta via classviva_id deve comparire nella bozza
+      // anche se il nome remoto non coincide con quello salvato.
+      subjects.putIfAbsent(subject.name.toLowerCase(), () => subject!);
+      if (remoteId != null && remoteId.isNotEmpty) {
+        remoteSubjects[remoteId] = subject;
+      }
       final candidate = Lesson(
         id: 'import-${item.date.toIso8601String()}-${item.periodNumber}-${subject.id}',
         subjectId: subject.id,

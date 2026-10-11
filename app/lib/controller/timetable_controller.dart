@@ -33,8 +33,19 @@ class TimetableController extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final subjects = await _repository.getSubjects();
-      final lessons = await _repository.getLessons();
+      var subjects = await _repository.getSubjects();
+      var lessons = await _repository.getLessons();
+      // Versioni precedenti potevano creare materie duplicate con lo stesso
+      // classviva_id: le unisco e ripunto le lezioni sulla voce principale.
+      final merged = _mergeDuplicateSubjects(subjects, lessons);
+      if (merged != null) {
+        await _repository.replaceAll(
+          subjects: merged.subjects,
+          lessons: merged.lessons,
+        );
+        subjects = await _repository.getSubjects();
+        lessons = await _repository.getLessons();
+      }
       timetable = Timetable(subjects: subjects, lessons: lessons);
       periodTimes = await _repository.getPeriodTimes();
       resources = await _repository.getResources();
@@ -336,6 +347,88 @@ class TimetableController extends ChangeNotifier {
     if (specific.isNotEmpty) return specific;
     return source.where((period) => period.weekday == 0).toList()
       ..sort((a, b) => a.number.compareTo(b.number));
+  }
+
+  /// Restituisce materie e lezioni con i duplicati (stesso classviva_id non
+  /// vuoto) uniti in un'unica materia, oppure null se non c'è nulla da fare.
+  ({List<Subject> subjects, List<Lesson> lessons})? _mergeDuplicateSubjects(
+    List<Subject> subjects,
+    List<Lesson> lessons,
+  ) {
+    final byRemoteId = <String, List<Subject>>{};
+    for (final subject in subjects) {
+      final remoteId = subject.classvivaId.trim();
+      if (remoteId.isEmpty) continue;
+      byRemoteId.putIfAbsent(remoteId, () => []).add(subject);
+    }
+    if (byRemoteId.values.every((group) => group.length == 1)) return null;
+
+    final lessonCount = <String, int>{};
+    for (final lesson in lessons) {
+      lessonCount.update(lesson.subjectId, (count) => count + 1,
+          ifAbsent: () => 1);
+    }
+    final remappedIds = <String, String>{};
+    final kept = <Subject>[];
+    final seen = <String>{};
+    for (final subject in subjects) {
+      final remoteId = subject.classvivaId.trim();
+      final group = byRemoteId[remoteId];
+      if (remoteId.isEmpty || group == null || group.length == 1) {
+        kept.add(subject);
+        continue;
+      }
+      if (!seen.add(remoteId)) continue;
+      // Tiene la materia con più lezioni; a parità la più "corta" (di solito
+      // il nome personalizzato come "GPOI" rispetto al nome ClasseViva).
+      final canonical = [...group]..sort((a, b) {
+          final byLessons = (lessonCount[b.id] ?? 0)
+              .compareTo(lessonCount[a.id] ?? 0);
+          return byLessons != 0
+              ? byLessons
+              : a.name.length.compareTo(b.name.length);
+        });
+      final primary = canonical.first;
+      final others = canonical.skip(1).toList();
+      for (final other in others) {
+        remappedIds[other.id] = primary.id;
+      }
+      final color = primary.colorValue != 0xFF6750A4
+          ? primary.colorValue
+          : others
+              .map((other) => other.colorValue)
+              .firstWhere((value) => value != 0xFF6750A4,
+                  orElse: () => primary.colorValue);
+      kept.add(Subject(
+        id: primary.id,
+        name: primary.name,
+        colorValue: color,
+        classvivaId: primary.classvivaId,
+        teachers: {primary.teachers, ...others.map((o) => o.teachers)}
+            .expand((list) => list)
+            .toList(),
+        rooms: {primary.rooms, ...others.map((o) => o.rooms)}
+            .expand((list) => list)
+            .toList(),
+      ));
+    }
+    final remappedLessons = [
+      for (final lesson in lessons)
+        remappedIds.containsKey(lesson.subjectId)
+            ? Lesson(
+                id: lesson.id,
+                subjectId: remappedIds[lesson.subjectId]!,
+                weekday: lesson.weekday,
+                startMinute: lesson.startMinute,
+                endMinute: lesson.endMinute,
+                startPeriod: lesson.startPeriod,
+                endPeriod: lesson.endPeriod,
+                teachers: lesson.teachers,
+                rooms: lesson.rooms,
+              )
+            : lesson,
+    ];
+    return (subjects: kept, lessons: remappedLessons);
   }
 
   String _id() => '${DateTime.now().microsecondsSinceEpoch}-${_counter++}';

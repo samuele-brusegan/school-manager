@@ -112,8 +112,17 @@ class _MemoryCredentialStore implements CredentialStore {
   Future<void> save({
     required String studentId,
     required String token,
+    String? username,
+    String? password,
+    DateTime? expiresAt,
   }) async {
     this.studentId = studentId;
     this.token = token;
   }
+
+  @override
+  Future<(String, String)?> readCredentials() async => null;
+
+  @override
+  Future<DateTime?> readExpiry() async => null;
 }

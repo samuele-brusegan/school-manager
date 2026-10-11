@@ -9,6 +9,7 @@ import '../model/entities/study_task.dart';
 import '../model/entities/subject.dart';
 import '../model/entities/timetable.dart';
 import '../model/services/subject_matcher.dart';
+import 'debug_metadata_view.dart';
 
 enum _AgendaMode { list, day, week, month }
 
@@ -610,6 +611,18 @@ class _AgendaViewState extends State<AgendaView> {
                 ),
               ),
             ],
+            if (widget.themeController.debugMode) ...[
+              const Divider(height: 20),
+              DebugInfoText([
+                'id: ${entry.id}',
+                'matched: ${entry.subject?.name ?? '-'} (${entry.subject?.id ?? '-'}, cv: ${entry.subject?.classvivaId ?? '-'})',
+                'keyword: ${entry.hasSchoolKeyword}  override: ${entry.testOverride}  isTest: ${entry.isTest}',
+                'typeLabel: ${entry.record?.typeLabel ?? '-'}',
+                if (entry.record != null) debugRecordText(entry.record!),
+                if (entry.task != null)
+                  'task: id=${entry.task!.id} done=${entry.task!.isDone} subject="${entry.task!.subject}" due=${entry.task!.dueDate}',
+              ].join('\n')),
+            ],
           ],
         ),
         actions: [
@@ -859,16 +872,25 @@ class _AgendaViewState extends State<AgendaView> {
           .toList();
 
   Widget _entryTile(_AgendaEntry entry) {
+    final debug = widget.themeController.debugMode;
     if (entry.task case final task?) {
       return CheckboxListTile(
         key: ValueKey('task-${task.id}'),
         value: task.isDone,
         onChanged: (_) => widget.controller.toggleTask(task),
         title: Text(task.title),
-        subtitle: Text([
-          if (task.subject.isNotEmpty) task.subject,
-          _agendaShortDate(task.dueDate),
-        ].join(' • ')),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text([
+              if (task.subject.isNotEmpty) task.subject,
+              _agendaShortDate(task.dueDate),
+            ].join(' • ')),
+            if (debug)
+              DebugInfoText(
+                  'task id: ${task.id}  done: ${task.isDone}  subject: "${task.subject}"\nmatched: ${entry.subject?.name ?? '-'} (${entry.subject?.id ?? '-'})  isTest: ${entry.isTest}'),
+          ],
+        ),
         secondary: IconButton(
           tooltip: 'Elimina compito',
           onPressed: () => widget.controller.deleteTask(task.id),
@@ -893,14 +915,22 @@ class _AgendaViewState extends State<AgendaView> {
       ),
       title: Text(entry.title,
           maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        [
-          entry.displaySubject,
-          if (entry.teacherName != null) entry.teacherName!,
-          if (entry.date != null) _agendaShortDate(entry.date!),
-        ].where((part) => part.isNotEmpty).join(' • '),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            [
+              entry.displaySubject,
+              if (entry.teacherName != null) entry.teacherName!,
+              if (entry.date != null) _agendaShortDate(entry.date!),
+            ].where((part) => part.isNotEmpty).join(' • '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (debug)
+            DebugInfoText(
+                'matched: ${entry.subject?.name ?? '-'} (${entry.subject?.id ?? '-'})\n${debugRecordText(entry.record!)}'),
+        ],
       ),
       onTap: () => _showEntryDetails(context, entry),
     );

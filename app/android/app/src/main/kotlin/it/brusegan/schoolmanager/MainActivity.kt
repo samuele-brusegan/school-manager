@@ -1,4 +1,4 @@
-package it.scuolamanager.school_manager
+package it.brusegan.schoolmanager
 
 import io.flutter.embedding.android.FlutterActivity
 

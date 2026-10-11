@@ -11,9 +11,13 @@ class ThemeController extends ChangeNotifier {
   /// Giorni del weekend visibili in agenda: 'all', 'sunday' o 'none'.
   String weekendMode = 'all';
 
+  /// Overlay di debug: mostra i metadati grezzi ovunque nell'app.
+  bool debugMode = false;
+
   Future<void> load() async {
     isDarkMode = await _repository.getDarkMode();
     weekendMode = await _repository.getWeekendMode();
+    debugMode = await _repository.getDebugMode();
     notifyListeners();
   }
 
@@ -28,6 +32,13 @@ class ThemeController extends ChangeNotifier {
     if (weekendMode == mode) return;
     await _repository.saveWeekendMode(mode);
     weekendMode = mode;
+    notifyListeners();
+  }
+
+  Future<void> setDebugMode(bool enabled) async {
+    if (debugMode == enabled) return;
+    await _repository.saveDebugMode(enabled);
+    debugMode = enabled;
     notifyListeners();
   }
 }

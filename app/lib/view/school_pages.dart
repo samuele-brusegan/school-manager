@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 
 import '../controller/school_data_controller.dart';
+import '../controller/theme_controller.dart';
 import '../controller/timetable_controller.dart';
 import '../model/contracts/classviva_data_gateway.dart';
 import '../model/entities/classviva_record.dart';
 import '../model/entities/lesson.dart';
 import '../model/entities/subject.dart';
+import '../model/entities/study_task.dart';
 import '../model/services/subject_matcher.dart';
 import 'app_palette.dart';
 import 'agenda_view.dart';
+import 'debug_metadata_view.dart';
 import 'classviva_login_view.dart';
 export 'agenda_view.dart';
 
@@ -17,10 +20,12 @@ class HomeView extends StatelessWidget {
     super.key,
     required this.timetableController,
     required this.schoolDataController,
+    required this.themeController,
   });
 
   final TimetableController timetableController;
   final SchoolDataController schoolDataController;
+  final ThemeController themeController;
 
   /// Primo giorno successivo a oggi con lezioni in orario
   /// (sabato/dom → lunedì, venerdì → lunedì, ecc.).
@@ -42,7 +47,7 @@ class HomeView extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
         animation: Listenable.merge(
-            [timetableController, schoolDataController]),
+            [timetableController, schoolDataController, themeController]),
         builder: (context, _) {
           final now = DateTime.now();
           final today = DateTime(now.year, now.month, now.day);
@@ -76,27 +81,37 @@ class HomeView extends StatelessWidget {
                 .compareTo(b.date ?? DateTime(9999)));
           // Compiti/impegni: eventi di agenda che non sono verifiche,
           // più i compiti personali, ordinati per data.
-          final commitments = <({DateTime? date, String title, String? subtitle})>[
-            for (final record in inWeek.where((r) => !isTest(r)))
-              (
-                date: record.date,
-                title: record.title,
-                subtitle: [
-                  if (record.subjectName != null) record.subjectName!,
-                  if (record.content != null &&
-                      record.content != record.title)
-                    record.content!,
-                ].join(' • '),
-              ),
-            for (final task in schoolDataController.tasks
-                .where((task) => !task.isDone))
-              (
-                date: task.dueDate,
-                title: task.title,
-                subtitle: task.subject,
-              ),
-          ]..sort((a, b) => (a.date ?? DateTime(9999))
+          final commitments = <({
+            DateTime? date,
+            String title,
+            Subject? subject,
+            ClassVivaRecord? record,
+            StudyTask? task,
+          })>[];
+          for (final record in inWeek.where((r) => !isTest(r))) {
+            commitments.add((
+              date: record.date,
+              title: record.title,
+              subject: matchRecordSubject(record, matcher, timetable),
+              record: record,
+              task: null,
+            ));
+          }
+          for (final task in schoolDataController.tasks
+              .where((task) => !task.isDone)) {
+            commitments.add((
+              date: task.dueDate,
+              title: task.title,
+              subject: task.subject.isEmpty
+                  ? null
+                  : matcher.match(task.subject),
+              record: null,
+              task: task,
+            ));
+          }
+          commitments.sort((a, b) => (a.date ?? DateTime(9999))
               .compareTo(b.date ?? DateTime(9999)));
+          final debug = themeController.debugMode;
           final isTomorrow =
               _sameDate(nextDay, today.add(const Duration(days: 1)));
           return ListView(
@@ -162,14 +177,32 @@ class HomeView extends StatelessWidget {
                         dense: true,
                         title: Text(record.title,
                             maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text([
-                          if (subject != null)
-                            subject.name
-                          else if (record.subjectName != null)
-                            record.subjectName!,
-                          if (record.date != null)
-                            '${_weekday(record.date!.weekday)} ${_shortDate(record.date!)}',
-                        ].join(' • ')),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text([
+                              if (subject != null)
+                                subject.name
+                              else if (record.subjectName != null)
+                                record.subjectName!,
+                              if (record.date != null)
+                                '${_weekday(record.date!.weekday)} ${_shortDate(record.date!)}',
+                            ].join(' • ')),
+                            if (debug)
+                              DebugInfoText(
+                                  'matched: ${subject?.name ?? '-'} (${subject?.id ?? '-'})\n${debugRecordText(record)}'),
+                          ],
+                        ),
+                        onTap: () => _showDetails(
+                          context,
+                          schoolDataController,
+                          title: record.title,
+                          subject: subject,
+                          fallbackSubjectName: record.subjectName,
+                          date: record.date,
+                          record: record,
+                          debug: debug,
+                        ),
                       ),
                     ),
                   );
@@ -179,20 +212,68 @@ class HomeView extends StatelessWidget {
               if (commitments.isEmpty)
                 const _EmptyText('Nessun compito o impegno in vista.')
               else
-                ...commitments.take(6).map((item) => ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.task_alt_outlined),
-                      title: Text(item.title,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text([
-                        if (item.subtitle != null && item.subtitle!.isNotEmpty)
-                          item.subtitle!,
-                        if (item.date != null)
-                          '${_weekday(item.date!.weekday)} ${_shortDate(item.date!)}',
-                      ].join(' • '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                    )),
+                ...commitments.take(6).map((item) {
+                  final subjectName = item.subject?.name ??
+                      (item.record?.subjectName ??
+                          (item.task?.subject.isNotEmpty == true
+                              ? item.task!.subject
+                              : null));
+                  final color = item.subject != null
+                      ? Color(item.subject!.colorValue)
+                      : Theme.of(context).colorScheme.secondaryContainer;
+                  return Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: RadialGradient(
+                          center: Alignment.bottomRight,
+                          radius: 1.6,
+                          colors: [
+                            color.withValues(alpha: .55),
+                            color.withValues(alpha: 0),
+                          ],
+                        ),
+                      ),
+                      child: ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.task_alt_outlined),
+                        title: Text(item.title,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text([
+                              if (subjectName != null) subjectName,
+                              if (item.date != null)
+                                '${_weekday(item.date!.weekday)} ${_shortDate(item.date!)}',
+                            ].join(' • '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis),
+                            if (debug)
+                              DebugInfoText([
+                                'matched: ${item.subject?.name ?? '-'} (${item.subject?.id ?? '-'})',
+                                if (item.record != null)
+                                  debugRecordText(item.record!),
+                                if (item.task != null)
+                                  'task id: ${item.task!.id}  done: ${item.task!.isDone}  subject: "${item.task!.subject}"',
+                              ].join('\n')),
+                          ],
+                        ),
+                        onTap: () => _showDetails(
+                          context,
+                          schoolDataController,
+                          title: item.title,
+                          subject: item.subject,
+                          fallbackSubjectName: subjectName,
+                          date: item.date,
+                          record: item.record,
+                          task: item.task,
+                          debug: debug,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
             ],
           );
         },
@@ -200,8 +281,10 @@ class HomeView extends StatelessWidget {
 }
 
 class PerformanceView extends StatefulWidget {
-  const PerformanceView({super.key, required this.controller});
+  const PerformanceView(
+      {super.key, required this.controller, required this.themeController});
   final SchoolDataController controller;
+  final ThemeController themeController;
 
   @override
   State<PerformanceView> createState() => _PerformanceViewState();
@@ -215,7 +298,7 @@ class _PerformanceViewState extends State<PerformanceView> {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-        animation: widget.controller,
+        animation: Listenable.merge([widget.controller, widget.themeController]),
         builder: (context, _) {
           final allGrades =
               widget.controller.records[ClassVivaSection.grades] ?? const [];
@@ -345,7 +428,9 @@ class _PerformanceViewState extends State<PerformanceView> {
                 _EmptyText(widget.controller.errors[ClassVivaSection.grades] ??
                     'Nessun voto caricato. Collega o aggiorna ClasseViva dal Registro.')
               else
-                ...grades.map((record) => _RecordTile(record: record)),
+                ...grades.map((record) => _RecordTile(
+                    record: record,
+                    debug: widget.themeController.debugMode)),
             ],
           );
         },
@@ -353,8 +438,10 @@ class _PerformanceViewState extends State<PerformanceView> {
 }
 
 class RegisterView extends StatefulWidget {
-  const RegisterView({super.key, required this.controller});
+  const RegisterView(
+      {super.key, required this.controller, required this.themeController});
   final SchoolDataController controller;
+  final ThemeController themeController;
 
   @override
   State<RegisterView> createState() => _RegisterViewState();
@@ -389,7 +476,7 @@ class _RegisterViewState extends State<RegisterView>
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-        animation: widget.controller,
+        animation: Listenable.merge([widget.controller, widget.themeController]),
         builder: (context, _) => Column(
           children: [
             Padding(
@@ -428,6 +515,7 @@ class _RegisterViewState extends State<RegisterView>
               child: TabBarView(controller: _tabs, children: [
                 _RecordSection(
                   controller: widget.controller,
+                  debug: widget.themeController.debugMode,
                   sections: const [
                     ClassVivaSection.attendance,
                     ClassVivaSection.notes
@@ -435,10 +523,12 @@ class _RegisterViewState extends State<RegisterView>
                 ),
                 _RecordSection(
                   controller: widget.controller,
+                  debug: widget.themeController.debugMode,
                   sections: const [ClassVivaSection.noticeboard],
                 ),
                 _RecordSection(
                   controller: widget.controller,
+                  debug: widget.themeController.debugMode,
                   sections: const [
                     ClassVivaSection.didactics,
                     ClassVivaSection.documents
@@ -446,6 +536,7 @@ class _RegisterViewState extends State<RegisterView>
                 ),
                 _RecordSection(
                   controller: widget.controller,
+                  debug: widget.themeController.debugMode,
                   sections: const [ClassVivaSection.schoolbooks],
                 ),
               ]),
@@ -489,9 +580,13 @@ class _ConnectionPanel extends StatelessWidget {
 }
 
 class _RecordSection extends StatelessWidget {
-  const _RecordSection({required this.controller, required this.sections});
+  const _RecordSection(
+      {required this.controller,
+      required this.sections,
+      this.debug = false});
   final SchoolDataController controller;
   final List<ClassVivaSection> sections;
+  final bool debug;
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -514,16 +609,99 @@ class _RecordSection extends StatelessWidget {
               _EmptyText(controller.errors[section] ?? 'Nessun dato caricato.')
             else
               ...(controller.records[section] ?? const [])
-                  .map((record) => _RecordTile(record: record)),
+                  .map((record) => _RecordTile(record: record, debug: debug)),
             const SizedBox(height: 12),
           ],
         ],
       );
 }
 
+/// Dialog con i dettagli di una verifica, di un evento d'agenda o di un
+/// compito personale: materia, data, docente e testo dell'evento.
+Future<void> _showDetails(
+  BuildContext context,
+  SchoolDataController controller, {
+  required String title,
+  Subject? subject,
+  String? fallbackSubjectName,
+  DateTime? date,
+  ClassVivaRecord? record,
+  StudyTask? task,
+  bool debug = false,
+}) {
+  final subjectName = subject?.name ?? fallbackSubjectName;
+  final rows = <(String, String)>[
+    if (subjectName != null && subjectName.isNotEmpty)
+      ('Materia', subjectName),
+    if (date != null) ('Data', _longDate(date)),
+    if (record?.teacherName case final teacher? when teacher.isNotEmpty)
+      ('Docente', teacher),
+    if (record?.typeLabel case final type? when type.isNotEmpty)
+      ('Tipo', type)
+    else if (record != null &&
+        record.subtitle.isNotEmpty &&
+        record.subtitle != title)
+      ('Tipo', record.subtitle),
+    if (record?.content case final content?
+        when content.isNotEmpty && content != title)
+      ('Dettagli', content),
+  ];
+  return showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      content: rows.isEmpty
+          ? const Text('Nessun dettaglio disponibile.')
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final (label, value) in rows)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label,
+                            style: Theme.of(context).textTheme.labelSmall),
+                        Text(value),
+                      ],
+                    ),
+                  ),
+                if (debug) ...[
+                  const Divider(height: 20),
+                  if (record != null)
+                    DebugInfoText(debugRecordText(record)),
+                  if (task != null)
+                    DebugInfoText(
+                        'task id: ${task!.id}  done: ${task!.isDone}  subject: "${task!.subject}"'),
+                  DebugInfoText(
+                      'matched subject: ${subject?.name ?? '-'} (id: ${subject?.id ?? '-'}, classviva_id: ${subject?.classvivaId ?? '-'})'),
+                ],
+              ],
+            ),
+      actions: [
+        if (task != null)
+          FilledButton.tonal(
+            onPressed: () {
+              controller.toggleTask(task);
+              Navigator.of(context).pop();
+            },
+            child: const Text('Segna come completato'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Chiudi'),
+        ),
+      ],
+    ),
+  );
+}
+
 class _RecordTile extends StatelessWidget {
-  const _RecordTile({required this.record});
+  const _RecordTile({required this.record, this.debug = false});
   final ClassVivaRecord record;
+  final bool debug;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -541,7 +719,13 @@ class _RecordTile extends StatelessWidget {
                 ),
           title:
               Text(record.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-          subtitle: record.subtitle.isEmpty ? null : Text(record.subtitle),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (record.subtitle.isNotEmpty) Text(record.subtitle),
+              if (debug) DebugInfoText(debugRecordText(record)),
+            ],
+          ),
           trailing: _trailingValue(record),
         ),
       );

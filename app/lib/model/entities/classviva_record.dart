@@ -38,6 +38,19 @@ class ClassVivaRecord {
         'homeworkDesc',
       ]);
 
+  /// Tipo dell'evento di agenda derivato dal codice ClasseViva
+  /// (AGHW = compiti, AGNT = note/annunci, AGCR = altri eventi).
+  String? get typeLabel {
+    final code = values['evtCode']?.toString().trim().toUpperCase();
+    return switch (code) {
+      'AGHW' => 'Compiti',
+      'AGNT' => 'Note',
+      'AGCR' => 'Altro evento',
+      '' || null => null,
+      _ => code,
+    };
+  }
+
   DateTime? get begin => _dateTimeValue('evtDatetimeBegin');
   DateTime? get end => _dateTimeValue('evtDatetimeEnd');
 

@@ -48,4 +48,25 @@ class SqliteThemePreferenceRepository implements ThemePreferenceRepository {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
+
+  @override
+  Future<bool> getDebugMode() async {
+    final rows = await _database.query(
+      'app_settings',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['debug_mode'],
+      limit: 1,
+    );
+    return rows.isNotEmpty && rows.single['value'] == 'true';
+  }
+
+  @override
+  Future<void> saveDebugMode(bool enabled) async {
+    await _database.insert(
+      'app_settings',
+      {'key': 'debug_mode', 'value': enabled.toString()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 }
