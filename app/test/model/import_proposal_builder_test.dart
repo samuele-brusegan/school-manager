@@ -19,9 +19,10 @@ void main() {
       ],
     );
     expect(proposal.subjects, hasLength(1));
-    expect(proposal.lessons, hasLength(2));
+    // Le ore consecutive della stessa materia vengono unite in una lezione.
+    expect(proposal.lessons, hasLength(1));
     expect(proposal.lessons.first.startMinute, 480);
-    expect(proposal.lessons.last.startMinute, 540);
+    expect(proposal.lessons.first.endMinute, 590);
     expect(proposal.missingPeriods, isEmpty);
   });
 

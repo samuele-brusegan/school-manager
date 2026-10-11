@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:school_manager/controller/import_controller.dart';
 import 'package:school_manager/model/contracts/classviva_gateway.dart';
 import 'package:school_manager/model/contracts/timetable_repository.dart';
+import 'package:school_manager/model/entities/classroom_resource.dart';
 import 'package:school_manager/model/entities/lesson.dart';
 import 'package:school_manager/model/entities/period_time.dart';
 import 'package:school_manager/model/entities/remote_lesson.dart';
@@ -24,7 +25,9 @@ void main() {
         referenceDay: DateTime(2026, 10, 1),
       );
       expect(gateway.start, DateTime(2026, 9, 21));
-      expect(gateway.end, DateTime(2026, 9, 27));
+      // La finestra arriva fino al giorno di riferimento per coprire
+      // anche le lezioni della settimana corrente.
+      expect(gateway.end, DateTime(2026, 10, 1));
       expect(controller.proposal?.lessons, hasLength(1));
       expect(controller.error, isNull);
     },
@@ -76,6 +79,9 @@ class _FakeGateway implements ClassVivaGateway {
   }
 
   @override
+  Future<bool> hasSession() async => true;
+
+  @override
   Future<void> signOut() async {}
 }
 
@@ -103,4 +109,18 @@ class _FakeRepository implements TimetableRepository {
   Future<void> savePeriodTimes(List<PeriodTime> periods) async {}
   @override
   Future<void> saveSubject(Subject subject) async {}
+  @override
+  Future<List<ClassroomResource>> getResources() async => [];
+  @override
+  Future<void> saveResource(ClassroomResource resource) async {}
+  @override
+  Future<void> deleteResource(String id) async {}
+  @override
+  Future<void> clearAll() async {}
+
+  @override
+  Future<Map<String, Object?>> exportConfig() async => {};
+
+  @override
+  Future<void> importConfig(Map<String, Object?> data) async {}
 }

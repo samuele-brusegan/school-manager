@@ -26,3 +26,11 @@ Insieme di materie e ricorrenze. La validazione richiede riferimenti materia esi
 ## ClasseViva lesson
 
 Record remoto con data, orario, descrizione materia e dati opzionali. Il mapper converte solo record con data e intervallo validi. Le materie sono abbinate senza distinzione tra maiuscole/minuscole dopo trim; nuovi nomi diventano materie della bozza. Nessuna scrittura viene eseguita durante il parsing.
+
+## ClassVivaRecord
+
+Record di lettura raggruppato per sezione (agenda, voti, presenze, note, bacheca, materiali, documenti e libri). Mantiene identificatore, titolo, descrizione, data e campi remoti disponibili. I record ricevuti sono cache locali consultabili offline; non rappresentano dati modificabili dall'app.
+
+## StudyTask
+
+Compito creato localmente con identificatore stabile, titolo, scadenza, materia facoltativa e stato completato. La modifica dello stato aggiorna il record esistente.

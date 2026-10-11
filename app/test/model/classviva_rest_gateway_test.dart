@@ -58,7 +58,7 @@ void main() {
         'uid': 'S123456X',
         'pass': 'secret',
       });
-      expect(requests.first.headers['Z-Dev-ApiKey'], '+zorro+');
+      expect(requests.first.headers['Z-Dev-ApiKey'], 'Tg1NWEwNGIgIC0K');
       expect(
         requests[1].url.path,
         '/rest/v1/students/123456/lessons/20260921/20260927',

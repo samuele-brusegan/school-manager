@@ -1,12 +1,15 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../contracts/classviva_gateway.dart';
+import '../contracts/classviva_data_gateway.dart';
 import '../contracts/credential_store.dart';
+import '../entities/classviva_record.dart';
 import '../entities/remote_lesson.dart';
 
-class ClassVivaRestGateway implements ClassVivaGateway {
+class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
   ClassVivaRestGateway({
     required http.Client client,
     required CredentialStore credentialStore,
@@ -21,8 +24,8 @@ class ClassVivaRestGateway implements ClassVivaGateway {
   String? _studentId;
   String? _token;
   static const _headers = {
-    'User-Agent': 'zorro/1.0',
-    'Z-Dev-ApiKey': '+zorro+',
+    'User-Agent': 'CVVS/std/4.1.7 Android/10',
+    'Z-Dev-ApiKey': 'Tg1NWEwNGIgIC0K',
     'Content-Type': 'application/json',
   };
 
@@ -39,6 +42,7 @@ class ClassVivaRestGateway implements ClassVivaGateway {
           body: jsonEncode({'ident': null, 'uid': username, 'pass': password}),
         )
         .timeout(const Duration(seconds: 15));
+    _debugResponse('login', response);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final detail = _responseMessage(response.body);
       final message = switch (response.statusCode) {
@@ -49,6 +53,11 @@ class ClassVivaRestGateway implements ClassVivaGateway {
       };
       throw ClassVivaException(
         detail == null ? message : '$message\nDettaglio: $detail',
+      );
+    }
+    if (response.body.trim().isEmpty) {
+      throw ClassVivaException(
+        'ClasseViva ha risposto al login con HTTP ${response.statusCode} senza un token o un corpo JSON.',
       );
     }
     final body = _decodeObject(response.body);
@@ -98,6 +107,7 @@ class ClassVivaRestGateway implements ClassVivaGateway {
       ..._headers,
       'Z-Auth-Token': token
     }).timeout(const Duration(seconds: 15));
+    _debugResponse('lezioni', response);
     if (response.statusCode == 401 || response.statusCode == 403) {
       throw const ClassVivaException(
         'ClasseViva ha rifiutato la sessione o non abilita questo account.',
@@ -123,6 +133,302 @@ class ClassVivaRestGateway implements ClassVivaGateway {
   }
 
   @override
+  Future<List<ClassVivaRecord>> records(
+    ClassVivaSection section, {
+    DateTime? start,
+    DateTime? end,
+  }) async {
+    final session = await _credentialStore.read();
+    final token = _token ?? session?.$2;
+    final student = _studentId ?? session?.$1;
+    _token = token;
+    _studentId = student;
+    if (token == null || student == null) {
+      throw const ClassVivaException(
+        'Sessione ClasseViva non disponibile: effettua nuovamente l’accesso.',
+      );
+    }
+
+    final rangePath = start != null && end != null
+        ? '/${_datePath(start)}/${_datePath(end)}'
+        : '';
+    final path = switch (section) {
+      ClassVivaSection.agenda => 'v1/students/$student/agenda/all$rangePath',
+      ClassVivaSection.grades => 'v1/students/$student/grades',
+      ClassVivaSection.attendance =>
+        'v1/students/$student/absences/details$rangePath',
+      ClassVivaSection.notes => 'v1/students/$student/notes/all',
+      ClassVivaSection.noticeboard => 'v1/students/$student/noticeboard',
+      ClassVivaSection.didactics => 'v1/students/$student/didactics',
+      ClassVivaSection.documents => 'v1/students/$student/documents',
+      ClassVivaSection.schoolbooks => 'v1/students/$student/schoolbooks',
+    };
+    final uri = _baseUri.resolve(path);
+    final headers = {..._headers, 'Z-Auth-Token': token};
+    final response = section == ClassVivaSection.documents
+        ? await _client
+            .post(uri, headers: headers, body: jsonEncode({}))
+            .timeout(const Duration(seconds: 15))
+        : await _client
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 15));
+    _debugResponse('registro ${section.name}', response);
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      throw const ClassVivaException(
+        'ClasseViva non abilita questa sezione per l’account collegato.',
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ClassVivaException(
+        'Impossibile recuperare ${_sectionLabel(section)} da ClasseViva (${response.statusCode}).',
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    final rows = _recordRows(decoded).expand(_flattenNestedRecord).toList();
+    return [
+      for (var index = 0; index < rows.length; index++)
+        _recordFromMap(section, rows[index], index),
+    ];
+  }
+
+  List<Map> _recordRows(Object? value) {
+    if (value is List) return value.whereType<Map>().toList();
+    if (value is! Map) return const [];
+    const wrappers = {
+      'agenda',
+      'grades',
+      'absences',
+      'notes',
+      'noticeboard',
+      'didactics',
+      'documents',
+      'schoolbooks',
+      'items',
+      'data',
+      'events',
+      'lessons',
+      'rows',
+      'results',
+      'subjects',
+      'content',
+      'didacticts',
+    };
+    for (final key in wrappers) {
+      final child = value[key];
+      if (child is List) return child.whereType<Map>().toList();
+      if (child is Map) {
+        final nestedRows = child.values
+            .whereType<List>()
+            .expand((rows) => rows.whereType<Map>())
+            .toList();
+        if (nestedRows.isNotEmpty) return nestedRows;
+      }
+    }
+    final nestedRows = value.values
+        .whereType<List>()
+        .expand((rows) => rows.whereType<Map>())
+        .toList();
+    if (nestedRows.isNotEmpty) return nestedRows;
+    return [value];
+  }
+
+  Iterable<Map> _flattenNestedRecord(Map row, [Map context = const {}]) {
+    const childCollections = {'books', 'folders', 'contents'};
+    for (final key in childCollections) {
+      final children = row[key];
+      if (children is! List || children.whereType<Map>().isEmpty) continue;
+      final inherited = <String, Object?>{
+        ...context,
+        for (final field in const [
+          'subjectDesc',
+          'courseDesc',
+          'teacherName',
+          'folderName'
+        ])
+          if (row[field] != null) field: row[field],
+      };
+      return children
+          .whereType<Map>()
+          .expand((child) => _flattenNestedRecord(child, inherited));
+    }
+    return [
+      {
+        ...context,
+        for (final entry in row.entries)
+          if (!childCollections.contains(entry.key.toString()))
+            entry.key.toString(): entry.value,
+      }
+    ];
+  }
+
+  ClassVivaRecord _recordFromMap(
+    ClassVivaSection section,
+    Map row,
+    int index,
+  ) {
+    String? first(Iterable<String> keys) {
+      for (final key in keys) {
+        final value = row[key];
+        if (value == null || value.toString().trim().isEmpty) continue;
+        return value.toString().trim();
+      }
+      return null;
+    }
+
+    final codeTitle = switch (row['evtCode']?.toString()) {
+      'ABA0' => 'Assenza',
+      'ABU0' => 'Ritardo o uscita anticipata',
+      'AGHW' => 'Compiti',
+      'AGNT' => 'Agenda',
+      _ => null,
+    };
+    final title = first(const [
+          'evtTitle',
+          'title',
+          'cntTitle',
+          'homeworkDesc',
+          'contentName',
+          'subjectDesc',
+          'subjectName',
+          'subject',
+          'gradeDesc',
+          'description',
+          'text',
+          'note',
+          'notes',
+          'folderName',
+          'name',
+          'documentName',
+          'bookTitle',
+          'materialName',
+        ]) ??
+        codeTitle ??
+        _sectionLabel(section);
+    final subtitle = first(const [
+          'evtText',
+          'description',
+          'displayValue',
+          'decimalValue',
+          'gradeValue',
+          'vote',
+          'value',
+          'evtValue',
+          'teacherDesc',
+          'authorName',
+          'evtAuthor',
+          'noteText',
+          'comment',
+          'justifReasonDesc',
+          'periodDesc',
+          'isbnCode',
+          'author',
+          'publisher',
+          'fileName',
+        ]) ??
+        first(const [
+          'subjectDesc',
+          'subjectName',
+          'teacher',
+          'teacherName',
+          'isJustified',
+          'status'
+        ]) ??
+        '';
+    // Per gli eventi con orario (agenda) il giorno corretto è quello
+    // locale di evtDatetimeBegin: evtDate può riportare il giorno UTC,
+    // spostando l'evento sul giorno precedente.
+    final beginDate = _parseRecordDate(first(const ['evtDatetimeBegin']));
+    final rawDate = first(const [
+      'evtDate',
+      'pubDT',
+      'assignmentDate',
+      'expiryDate',
+      'shareDT',
+      'date',
+      'dateTime',
+      'evtDatetime',
+      'eventDate',
+      'gradeDate',
+      'insertDate',
+    ]);
+    final parsedDate = _parseRecordDate(rawDate);
+    final date = beginDate != null
+        ? DateTime(beginDate.year, beginDate.month, beginDate.day)
+        : parsedDate;
+    final values = <String, Object?>{
+      for (final entry in row.entries)
+        entry.key.toString(): _jsonSafe(entry.value),
+    };
+    return ClassVivaRecord(
+      id: first(const ['evtId', 'id', 'pubId', 'gradeId', 'contentId']) ??
+          '${section.name}-$index-${title.hashCode}',
+      section: section.name,
+      title: title,
+      subtitle: subtitle,
+      date: date,
+      values: values,
+    );
+  }
+
+  Object? _jsonSafe(Object? value) {
+    if (value == null || value is String || value is num || value is bool) {
+      return value;
+    }
+    if (value is List) return value.map(_jsonSafe).toList();
+    if (value is Map) {
+      return value
+          .map((key, child) => MapEntry(key.toString(), _jsonSafe(child)));
+    }
+    return value.toString();
+  }
+
+  DateTime? _parseRecordDate(String? value) {
+    if (value == null) return null;
+    var parsed = DateTime.tryParse(value);
+    if (parsed != null) {
+      // Istanti senza fuso dichiarato: ClasseViva li esprime in UTC.
+      if (!parsed.isUtc && _hasNoTimezone(value)) {
+        parsed = DateTime.tryParse('${value}Z');
+      }
+      // Le date con fuso orario (es. evtDatetimeBegin) vanno convertite
+      // all'ora locale: altrimenti un evento serale UTC cade sul giorno
+      // precedente. Le date pure (yyyy-MM-dd) restano invariate.
+      return parsed != null && parsed.isUtc ? parsed.toLocal() : parsed;
+    }
+    final digits = value.replaceAll(RegExp(r'\D'), '');
+    if (digits.length >= 8) {
+      return DateTime.tryParse(
+        '${digits.substring(0, 4)}-${digits.substring(4, 6)}-${digits.substring(6, 8)}',
+      );
+    }
+    return null;
+  }
+
+  /// Vero se la stringa data/ora non dichiara alcun fuso orario.
+  static bool _hasNoTimezone(String raw) {
+    final time = raw.contains('T') ? raw.split('T').last : '';
+    return time.isNotEmpty &&
+        !time.contains('Z') &&
+        !time.contains('+') &&
+        !time.contains('-');
+  }
+
+  String _sectionLabel(ClassVivaSection section) => switch (section) {
+        ClassVivaSection.agenda => 'Impegno',
+        ClassVivaSection.grades => 'Valutazione',
+        ClassVivaSection.attendance => 'Presenza',
+        ClassVivaSection.notes => 'Nota',
+        ClassVivaSection.noticeboard => 'Comunicazione',
+        ClassVivaSection.didactics => 'Materiale didattico',
+        ClassVivaSection.documents => 'Documento',
+        ClassVivaSection.schoolbooks => 'Libro di testo',
+      };
+
+  @override
+  Future<bool> hasSession() async =>
+      _token != null || await _credentialStore.read() != null;
+
+  @override
   Future<void> signOut() async {
     _studentId = null;
     _token = null;
@@ -143,11 +449,22 @@ class ClassVivaRestGateway implements ClassVivaGateway {
         eventCode != 'LSF0') {
       return null;
     }
+    final teacher = (row['authorName'] ??
+            row['teacherName'] ??
+            row['teacherDesc'] ??
+            row['author'])
+        ?.toString()
+        .trim();
     return RemoteLesson(
       date: date,
       subjectName: subject,
       periodNumber: period,
       duration: duration,
+      teacherName:
+          teacher == null || teacher.isEmpty ? null : teacher,
+      subjectId:
+          (row['subjectId'] ?? row['subject_id'] ?? row['materiaId'])
+              ?.toString(),
     );
   }
 
@@ -159,6 +476,14 @@ class ClassVivaRestGateway implements ClassVivaGateway {
       );
     }
     return decoded;
+  }
+
+  void _debugResponse(String operation, http.Response response) {
+    if (!kDebugMode) return;
+    debugPrint(
+      '[ClasseViva] $operation -> HTTP ${response.statusCode} '
+      '(${response.bodyBytes.length} byte)',
+    );
   }
 
   String? _responseMessage(String body) {

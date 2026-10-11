@@ -59,6 +59,73 @@ class ImportController extends ChangeNotifier {
     }
   }
 
+  Future<List<PeriodTime>> guessPeriodTimes() async {
+    if (_remoteLessons.isEmpty) return const [];
+    final counts = <int, int>{};
+    for (final lesson in _remoteLessons) {
+      final lastPeriod = (lesson.periodNumber + lesson.duration - 1).clamp(1, 20);
+      final weekday = lesson.date.weekday;
+      if (weekday < 1 || weekday > 7) continue;
+      if (lastPeriod > (counts[weekday] ?? 0)) counts[weekday] = lastPeriod;
+    }
+
+    final configured = await _repository.getPeriodTimes();
+    final durations = configured
+        .map((period) => period.endMinute - period.startMinute)
+        .where((minutes) => minutes > 0)
+        .toList();
+    final gaps = <int>[];
+    final schedules = <int, List<PeriodTime>>{};
+    for (final period in configured) {
+      schedules.putIfAbsent(period.weekday, () => []).add(period);
+    }
+    for (final schedule in schedules.values) {
+      schedule.sort((a, b) => a.number.compareTo(b.number));
+      for (var index = 1; index < schedule.length; index++) {
+        final gap = schedule[index].startMinute - schedule[index - 1].endMinute;
+        if (gap >= 0 && schedule[index].number == schedule[index - 1].number + 1) {
+          gaps.add(gap);
+        }
+      }
+    }
+    final lessonMinutes = _median(durations) ?? 60;
+    final breakMinutes = _median(gaps) ?? 10;
+    final guesses = <PeriodTime>[];
+
+    for (final entry in counts.entries) {
+      final weekday = entry.key;
+      final daySpecific = schedules[weekday] ?? const <PeriodTime>[];
+      final existing = daySpecific.isNotEmpty
+          ? daySpecific
+          : schedules[0] ?? const <PeriodTime>[];
+      final byNumber = {for (final period in existing) period.number: period};
+      var nextStart = byNumber[1]?.startMinute ?? 8 * 60;
+      for (var number = 1; number <= entry.value; number++) {
+        final known = byNumber[number];
+        final start = known?.startMinute ?? nextStart;
+        final end = known?.endMinute ?? start + lessonMinutes;
+        if (start >= 1440 || end > 1440) break;
+        guesses.add(PeriodTime(
+          number: number,
+          weekday: weekday,
+          startMinute: start,
+          endMinute: end,
+        ));
+        nextStart = end + breakMinutes;
+      }
+    }
+    return guesses;
+  }
+
+  int? _median(List<int> values) {
+    if (values.isEmpty) return null;
+    final sorted = [...values]..sort();
+    return sorted[sorted.length ~/ 2];
+  }
+
+  /// Vero se esiste una sessione ClasseViva salvata o attiva.
+  Future<bool> hasSession() => _gateway.hasSession();
+
   Future<void> signOut() async {
     await _gateway.signOut();
     _remoteLessons = [];
@@ -71,10 +138,11 @@ class ImportController extends ChangeNotifier {
     final today = referenceDay ?? DateTime.now();
     final currentMonday = DateTime(today.year, today.month, today.day)
         .subtract(Duration(days: today.weekday - 1));
+    // Si prendono le lezioni dalla settimana precedente fino a oggi:
+    // nel fine settimana i giorni lun-ven della settimana corrente
+    // contengono già le lezioni appena svolte.
     final previousMonday = currentMonday.subtract(const Duration(days: 7));
-    final previousSunday = currentMonday.subtract(const Duration(days: 1));
-    _remoteLessons =
-        await _gateway.lessonsBetween(previousMonday, previousSunday);
+    _remoteLessons = await _gateway.lessonsBetween(previousMonday, today);
     proposal = _builder.build(
       _remoteLessons,
       existing: await _repository.getSubjects(),

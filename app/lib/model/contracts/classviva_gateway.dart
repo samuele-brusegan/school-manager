@@ -10,5 +10,6 @@ class ClassVivaException implements Exception {
 abstract interface class ClassVivaGateway {
   Future<void> signIn({required String username, required String password});
   Future<List<RemoteLesson>> lessonsBetween(DateTime start, DateTime end);
+  Future<bool> hasSession();
   Future<void> signOut();
 }

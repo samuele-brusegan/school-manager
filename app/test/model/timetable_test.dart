@@ -31,29 +31,30 @@ void main() {
       expect(timetable.lessons, hasLength(2));
     });
 
-    test('rejects overlapping lessons and missing subject references', () {
-      expect(
-        () => Timetable(
-          subjects: [subject],
-          lessons: [
-            Lesson(
-              id: 'a',
-              subjectId: 'math',
-              weekday: 1,
-              startMinute: 480,
-              endMinute: 540,
-            ),
-            Lesson(
-              id: 'b',
-              subjectId: 'math',
-              weekday: 1,
-              startMinute: 530,
-              endMinute: 580,
-            ),
-          ],
-        ),
-        throwsArgumentError,
+    test('accepts overlapping lessons rendered on parallel lanes', () {
+      final timetable = Timetable(
+        subjects: [subject],
+        lessons: [
+          Lesson(
+            id: 'a',
+            subjectId: 'math',
+            weekday: 1,
+            startMinute: 480,
+            endMinute: 540,
+          ),
+          Lesson(
+            id: 'b',
+            subjectId: 'math',
+            weekday: 1,
+            startMinute: 530,
+            endMinute: 580,
+          ),
+        ],
       );
+      expect(timetable.lessons, hasLength(2));
+    });
+
+    test('rejects missing subject references', () {
       expect(
         () => Timetable(
           subjects: const [],

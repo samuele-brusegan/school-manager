@@ -5,6 +5,7 @@ class Subject {
     required this.id,
     required String name,
     this.colorValue = 0xFF6750A4,
+    this.classvivaId = '',
     List<String> teachers = const [],
     List<String> rooms = const [],
   }) : name = name.trim() {
@@ -18,6 +19,7 @@ class Subject {
   final String id;
   final String name;
   final int colorValue;
+  final String classvivaId;
   late final List<String> teachers;
   late final List<String> rooms;
 
@@ -25,6 +27,7 @@ class Subject {
         'id': id,
         'name': name,
         'color_value': colorValue,
+        'classviva_id': classvivaId,
         'teachers_json': jsonEncode(teachers),
         'rooms_json': jsonEncode(rooms),
       };
@@ -33,6 +36,7 @@ class Subject {
         id: map['id']! as String,
         name: map['name']! as String,
         colorValue: map['color_value']! as int,
+        classvivaId: map['classviva_id'] as String? ?? '',
         teachers: _decodeNames(map['teachers_json']),
         rooms: _decodeNames(map['rooms_json']),
       );

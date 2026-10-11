@@ -19,4 +19,13 @@ abstract interface class TimetableRepository {
   Future<List<ClassroomResource>> getResources();
   Future<void> saveResource(ClassroomResource resource);
   Future<void> deleteResource(String id);
+  Future<void> clearAll();
+
+  /// Serializza la configurazione (materie, lezioni, campanelle,
+  /// risorse, impostazioni) in una mappa JSON-esportabile.
+  Future<Map<String, Object?>> exportConfig();
+
+  /// Ripristina la configurazione da [exportConfig]; compiti, cache
+  /// ClasseViva e flag verifiche non vengono toccati.
+  Future<void> importConfig(Map<String, Object?> data);
 }

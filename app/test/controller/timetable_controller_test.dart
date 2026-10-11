@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:school_manager/controller/timetable_controller.dart';
 import 'package:school_manager/model/contracts/timetable_repository.dart';
+import 'package:school_manager/model/entities/classroom_resource.dart';
 import 'package:school_manager/model/entities/lesson.dart';
 import 'package:school_manager/model/entities/period_time.dart';
 import 'package:school_manager/model/entities/subject.dart';
@@ -24,13 +25,15 @@ void main() {
         startMinute: 540,
         endMinute: 590);
     expect(controller.timetable!.lessons.single.weekday, 2);
-    expect(controller.timetable!.subjects.single.name, 'Fisica');
+    expect(
+      controller.timetable!.subjects.map((subject) => subject.name),
+      contains('Fisica'),
+    );
     await controller.deleteLesson(id);
     expect(controller.timetable!.lessons, isEmpty);
   });
 
-  test('rejects an overlapping lesson without changing persisted data',
-      () async {
+  test('accepts overlapping lessons shown on parallel lanes', () async {
     final repository = _MemoryRepository();
     final controller = TimetableController(repository);
     await controller.load();
@@ -39,12 +42,9 @@ void main() {
         weekday: 1,
         startMinute: 480,
         endMinute: 540);
-    await expectLater(
-      controller.addLesson(
-          subjectName: 'Fisica', weekday: 1, startMinute: 530, endMinute: 590),
-      throwsArgumentError,
-    );
-    expect(repository.lessons, hasLength(1));
+    await controller.addLesson(
+        subjectName: 'Fisica', weekday: 1, startMinute: 530, endMinute: 590);
+    expect(repository.lessons, hasLength(2));
   });
 }
 
@@ -92,4 +92,32 @@ class _MemoryRepository implements TimetableRepository {
     subjects.removeWhere((existing) => existing.id == subject.id);
     subjects.add(subject);
   }
+
+  List<ClassroomResource> resources = [];
+  @override
+  Future<List<ClassroomResource>> getResources() async => List.of(resources);
+  @override
+  Future<void> saveResource(ClassroomResource resource) async {
+    resources.removeWhere((existing) => existing.id == resource.id);
+    resources.add(resource);
+  }
+
+  @override
+  Future<void> deleteResource(String id) async {
+    resources.removeWhere((resource) => resource.id == id);
+  }
+
+  @override
+  Future<void> clearAll() async {
+    subjects = [];
+    lessons = [];
+    periods = [];
+    resources = [];
+  }
+
+  @override
+  Future<Map<String, Object?>> exportConfig() async => {};
+
+  @override
+  Future<void> importConfig(Map<String, Object?> data) async {}
 }

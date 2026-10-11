@@ -1,21 +1,35 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../controller/import_controller.dart';
+import '../controller/school_data_controller.dart';
+import '../controller/theme_controller.dart';
 import '../controller/timetable_controller.dart';
 import '../model/entities/lesson.dart';
 import '../model/entities/subject.dart';
 import '../model/entities/period_time.dart';
 import '../model/entities/classroom_resource.dart';
 import '../model/services/distinct_subject_color_selector.dart';
+import '../util/text_file_download.dart';
+import 'app_palette.dart';
+import 'classviva_login_view.dart';
+import 'school_pages.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({
     super.key,
     required this.timetableController,
     required this.importController,
+    required this.schoolDataController,
+    required this.themeController,
   });
   final TimetableController timetableController;
   final ImportController importController;
+  final SchoolDataController schoolDataController;
+  final ThemeController themeController;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -30,14 +44,53 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     widget.timetableController.load();
+    widget.schoolDataController.loadLocal();
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('School Manager')),
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          actions: [
+            if (_tab == 1)
+              IconButton(
+                tooltip: 'Importa da ClasseViva',
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => Scaffold(
+                    appBar: AppBar(title: const Text('Importa da ClasseViva')),
+                    body: ClassVivaImportView(
+                      importController: widget.importController,
+                      timetableController: widget.timetableController,
+                      schoolDataController: widget.schoolDataController,
+                    ),
+                  ),
+                )),
+                icon: const Icon(Icons.download_outlined),
+              ),
+            IconButton(
+              tooltip: 'Impostazioni',
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: const Text('Impostazioni')),
+                  body: SettingsView(
+                    controller: widget.timetableController,
+                    themeController: widget.themeController,
+                    importController: widget.importController,
+                    schoolDataController: widget.schoolDataController,
+                  ),
+                ),
+              )),
+              icon: const Icon(Icons.settings_outlined),
+            ),
+          ],
+        ),
         body: IndexedStack(
           index: _tab,
           children: [
+            HomeView(
+              timetableController: widget.timetableController,
+              schoolDataController: widget.schoolDataController,
+            ),
             TimetableView(
               controller: widget.timetableController,
               onDisplayChanged: (day, dayMode) => setState(() {
@@ -45,15 +98,24 @@ class _HomePageState extends State<HomePage> {
                 _dayMode = dayMode;
               }),
             ),
-            SettingsView(controller: widget.timetableController),
+            AgendaView(
+              controller: widget.schoolDataController,
+              timetableController: widget.timetableController,
+              themeController: widget.themeController,
+            ),
+            PerformanceView(controller: widget.schoolDataController),
+            RegisterView(controller: widget.schoolDataController),
           ],
         ),
-        floatingActionButton: _tab == 0
+        floatingActionButton: _tab == 1 || _tab == 2
             ? FloatingActionButton.extended(
-                onPressed: () => _addLesson(context,
-                    weekday: _dayMode ? _displayedDay : null),
-                icon: const Icon(Icons.add),
-                label: const Text('Aggiungi lezione'),
+                onPressed: _tab == 1
+                    ? () => _addLesson(context,
+                        weekday: _dayMode ? _displayedDay : null)
+                    : () => _addTask(context),
+                icon: Icon(_tab == 1 ? Icons.add : Icons.task_alt_outlined),
+                label:
+                    Text(_tab == 1 ? 'Aggiungi lezione' : 'Aggiungi compito'),
               )
             : null,
         bottomNavigationBar: NavigationBar(
@@ -61,16 +123,91 @@ class _HomePageState extends State<HomePage> {
           onDestinationSelected: (value) => setState(() => _tab = value),
           destinations: const [
             NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            NavigationDestination(
               icon: Icon(Icons.calendar_view_week),
               label: 'Orario',
             ),
             NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              label: 'Impostazioni',
+              icon: Icon(Icons.event_note_outlined),
+              label: 'Agenda',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.trending_up_outlined),
+              label: 'Voti',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.more_horiz),
+              label: 'Altro',
             ),
           ],
         ),
       );
+
+  Future<void> _addTask(BuildContext context) async {
+    final title = TextEditingController();
+    final subject = TextEditingController();
+    var dueDate = DateTime.now();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Nuovo compito'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: title,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Compito'),
+            ),
+            TextField(
+              controller: subject,
+              decoration:
+                  const InputDecoration(labelText: 'Materia (facoltativa)'),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_outlined),
+              title: const Text('Scadenza'),
+              subtitle: Text(
+                  '${dueDate.day.toString().padLeft(2, '0')}/${dueDate.month.toString().padLeft(2, '0')}/${dueDate.year}'),
+              onTap: () async {
+                final chosen = await showDatePicker(
+                  context: context,
+                  initialDate: dueDate,
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime(2100),
+                );
+                if (chosen != null) setDialogState(() => dueDate = chosen);
+              },
+            ),
+          ]),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Annulla'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Salva'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == true && title.text.trim().isNotEmpty) {
+      await widget.schoolDataController.addTask(
+        title: title.text,
+        subject: subject.text,
+        dueDate: dueDate,
+      );
+    }
+    title.dispose();
+    subject.dispose();
+  }
 
   Future<void> _addLesson(BuildContext context,
       {int? weekday, int? startPeriod, int? endPeriod}) async {
@@ -630,18 +767,33 @@ class _DayScheduleColumn extends StatelessWidget {
             )),
       for (final lesson in lessons)
         if (_start(lesson) >= 1 && _end(lesson) <= rowCount + 1)
-          Positioned(
-            left: (dayWidth - 8) * lanes[lesson]!.$1 / lanes[lesson]!.$2 + 2,
-            width: (dayWidth - 8) / lanes[lesson]!.$2,
-            top: (_start(lesson) - 1) * _WeekGrid._periodHeight + 2,
-            height:
-                (_end(lesson) - _start(lesson)) * _WeekGrid._periodHeight - 4,
-            child: _GridLessonBlock(
-                lesson: lesson,
-                subject: subjects[lesson.subjectId],
-                onEdit: () => onEdit(lesson, subjects[lesson.subjectId]),
-                onDelete: () => onDelete(lesson)),
-          ),
+          Builder(builder: (context) {
+            final joinedAbove = lessons.any((other) =>
+                other.weekday == lesson.weekday &&
+                _end(other) == _start(lesson) &&
+                other.subjectId == lesson.subjectId);
+            final joinedBelow = lessons.any((other) =>
+                other.weekday == lesson.weekday &&
+                _end(lesson) == _start(other) &&
+                other.subjectId == lesson.subjectId);
+            final top = (_start(lesson) - 1) * _WeekGrid._periodHeight +
+                (joinedAbove ? 0 : 2);
+            final bottom = (_end(lesson) - 1) * _WeekGrid._periodHeight -
+                (joinedBelow ? 0 : 2);
+            return Positioned(
+              left: (dayWidth - 8) * lanes[lesson]!.$1 / lanes[lesson]!.$2 + 2,
+              width: (dayWidth - 8) / lanes[lesson]!.$2,
+              top: top,
+              height: bottom - top,
+              child: _GridLessonBlock(
+                  lesson: lesson,
+                  subject: subjects[lesson.subjectId],
+                  joinedAbove: joinedAbove,
+                  joinedBelow: joinedBelow,
+                  onEdit: () => onEdit(lesson, subjects[lesson.subjectId]),
+                  onDelete: () => onDelete(lesson)),
+            );
+          }),
     ]);
   }
 }
@@ -650,11 +802,15 @@ class _GridLessonBlock extends StatelessWidget {
   const _GridLessonBlock({
     required this.lesson,
     required this.subject,
+    required this.joinedAbove,
+    required this.joinedBelow,
     required this.onEdit,
     required this.onDelete,
   });
   final Lesson lesson;
   final Subject? subject;
+  final bool joinedAbove;
+  final bool joinedBelow;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
@@ -663,69 +819,100 @@ class _GridLessonBlock extends StatelessWidget {
     final color = Color(subject?.colorValue ?? 0xFF6750A4);
     final foreground =
         color.computeLuminance() > .45 ? Colors.black87 : Colors.white;
-    return Card(
+    final radius = BorderRadius.vertical(
+      top: joinedAbove ? Radius.zero : const Radius.circular(8),
+      bottom: joinedBelow ? Radius.zero : const Radius.circular(8),
+    );
+    final border = Border(
+      left: BorderSide(color: color, width: 1.5),
+      right: BorderSide(color: color, width: 1.5),
+      top: joinedAbove ? BorderSide.none : BorderSide(color: color, width: 1.5),
+      bottom:
+          joinedBelow ? BorderSide.none : BorderSide(color: color, width: 1.5),
+    );
+    return Container(
       margin: const EdgeInsets.symmetric(horizontal: 3),
+      decoration: BoxDecoration(
+        color: color,
+        border: border,
+        borderRadius: radius,
+      ),
       clipBehavior: Clip.antiAlias,
-      color: color.withValues(alpha: .94),
-      shape: RoundedRectangleBorder(
-        side: BorderSide(color: color, width: 1.5),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: InkWell(
-        onTap: onEdit,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Container(
-                height: 4,
-                decoration: BoxDecoration(
-                    color: color, borderRadius: BorderRadius.circular(4))),
-            const SizedBox(height: 4),
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(
-                child: Text(subject?.name ?? 'Materia',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.bold, color: foreground)),
-              ),
-              SizedBox(
-                width: 24,
-                height: 24,
-                child: IconButton(
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'Elimina lezione',
-                  onPressed: onDelete,
-                  icon: Icon(Icons.close, size: 16, color: foreground),
-                ),
-              ),
-            ]),
-            if (lesson.teachers.isNotEmpty)
-              Text('Prof: ${lesson.teachers.join(', ')}',
-                  softWrap: true,
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: foreground)),
-            if (lesson.rooms.isNotEmpty)
-              Text('Aula: ${lesson.rooms.join(', ')}',
-                  softWrap: true,
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: foreground)),
-          ]),
-        ),
-      ),
+      child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onEdit,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                        height: 4,
+                        decoration: BoxDecoration(
+                            color: color,
+                            borderRadius: BorderRadius.circular(4))),
+                    const SizedBox(height: 4),
+                    Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(subject?.name ?? 'Materia',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: foreground)),
+                          ),
+                          SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: IconButton(
+                              padding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Elimina lezione',
+                              onPressed: onDelete,
+                              icon: Icon(Icons.close,
+                                  size: 16, color: foreground),
+                            ),
+                          ),
+                        ]),
+                    if (lesson.teachers.isNotEmpty)
+                      Text('Prof: ${lesson.teachers.join(', ')}',
+                          softWrap: true,
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: foreground)),
+                    if (lesson.rooms.isNotEmpty)
+                      Text('Aula: ${lesson.rooms.join(', ')}',
+                          softWrap: true,
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: foreground)),
+                  ]),
+            ),
+          )),
     );
   }
 }
 
 class SettingsView extends StatelessWidget {
-  const SettingsView({super.key, required this.controller});
+  const SettingsView({
+    super.key,
+    required this.controller,
+    required this.themeController,
+    required this.importController,
+    required this.schoolDataController,
+  });
   final TimetableController controller;
+  final ThemeController themeController;
+  final ImportController importController;
+  final SchoolDataController schoolDataController;
 
   Future<void> _configureDay(BuildContext context, int weekday) async {
     final periods = await showDialog<List<PeriodTime>>(
@@ -823,9 +1010,111 @@ class SettingsView extends StatelessWidget {
     if (confirmed == true) await controller.deleteSubject(subject.id);
   }
 
+  Future<void> _exportConfig(BuildContext context) async {
+    try {
+      final json = await controller.exportConfigJson();
+      if (kIsWeb) {
+        downloadTextFile('school_manager_config.json', json);
+        if (context.mounted) {
+          _message(context, 'Configurazione esportata.');
+        }
+        return;
+      }
+      final saved = await FilePicker.saveFile(
+        dialogTitle: 'Esporta configurazione',
+        fileName: 'school_manager_config.json',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        bytes: utf8.encode(json),
+      );
+      if (!context.mounted) return;
+      _message(context, saved == null
+          ? 'Esportazione annullata.'
+          : 'Configurazione esportata.');
+    } catch (error) {
+      if (context.mounted) _message(context, error.toString());
+    }
+  }
+
+  Future<void> _importConfig(BuildContext context) async {
+    try {
+      final picked = await FilePicker.pickFiles(
+        dialogTitle: 'Importa configurazione',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+      final bytes = picked?.files.single.bytes;
+      if (bytes == null || !context.mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Importare la configurazione?'),
+          content: const Text(
+            'Materie, lezioni, campanelle, risorse e impostazioni attuali saranno sostituite dal file. Compiti e dati ClasseViva restano invariati.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annulla'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Importa'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+      await controller.importConfigJson(utf8.decode(bytes));
+      if (context.mounted) {
+        _message(context, 'Configurazione importata.');
+      }
+    } on FormatException catch (error) {
+      if (context.mounted) _message(context, error.message);
+    } catch (error) {
+      if (context.mounted) _message(context, error.toString());
+    }
+  }
+
+  Future<void> _clearAllData(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminare tutti i dati?'),
+        content: const Text(
+          'Verranno eliminati definitivamente orario, materie, campanelle, aule, professori, compiti, dati ClasseViva salvati e la sessione collegata. L’operazione non è reversibile.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annulla'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Elimina tutto'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    try {
+      await importController.signOut();
+      await controller.clearAllData();
+      await schoolDataController.loadLocal();
+      if (context.mounted) _message(context, 'Tutti i dati sono stati eliminati.');
+    } catch (error) {
+      if (context.mounted) _message(context, error.toString());
+    }
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-        animation: controller,
+        animation: Listenable.merge([controller, themeController]),
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
           children: [
@@ -836,10 +1125,93 @@ class SettingsView extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant)),
             const SizedBox(height: 16),
-            _SettingsSectionHeader(
+            Card(
+              child: SwitchListTile.adaptive(
+                secondary: Icon(themeController.isDarkMode
+                    ? Icons.dark_mode_outlined
+                    : Icons.light_mode_outlined),
+                title: const Text('Tema scuro'),
+                subtitle: const Text('Mantieni questa scelta sul dispositivo.'),
+                value: themeController.isDarkMode,
+                onChanged: themeController.setDarkMode,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        const Icon(Icons.weekend_outlined),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Text('Fine settimana in agenda',
+                              style:
+                                  Theme.of(context).textTheme.titleMedium),
+                        ),
+                      ]),
+                      const SizedBox(height: 12),
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(
+                              value: 'all', label: Text('Lun–Dom')),
+                          ButtonSegment(
+                              value: 'sunday', label: Text('Lun–Sab')),
+                          ButtonSegment(
+                              value: 'none', label: Text('Lun–Ven')),
+                        ],
+                        selected: {themeController.weekendMode},
+                        onSelectionChanged: (selection) =>
+                            themeController
+                                .setWeekendMode(selection.single),
+                      ),
+                    ]),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const _SettingsSectionHeader(
+                icon: Icons.link_outlined,
+                title: 'ClasseViva',
+                subtitle: 'Collega il registro elettronico per importare orario e dati',
+                accent: AppPalette.classeViva),
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ClassVivaLoginView(
+                          controller: schoolDataController),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => Scaffold(
+                            appBar: AppBar(
+                                title:
+                                    const Text('Importa da ClasseViva')),
+                            body: ClassVivaImportView(
+                              importController: importController,
+                              timetableController: controller,
+                              schoolDataController: schoolDataController,
+                            ),
+                          ),
+                        )),
+                        icon: const Icon(Icons.download_outlined),
+                        label: const Text('Importa orario'),
+                      ),
+                    ]),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const _SettingsSectionHeader(
                 icon: Icons.schedule_outlined,
                 title: 'Orario scolastico',
-                subtitle: 'Campanelle e numero di ore per giorno'),
+                subtitle: 'Campanelle e numero di ore per giorno',
+                accent: AppPalette.indigo),
             Card(
               clipBehavior: Clip.antiAlias,
               child: Column(children: [
@@ -867,10 +1239,11 @@ class SettingsView extends StatelessWidget {
             const SizedBox(height: 20),
             Row(children: [
               Expanded(
-                  child: _SettingsSectionHeader(
+                  child: const _SettingsSectionHeader(
                       icon: Icons.menu_book_outlined,
                       title: 'Materie',
-                      subtitle: 'Colore, docenti e aule associate')),
+                      subtitle: 'Colore, docenti e aule associate',
+                      accent: AppPalette.amber)),
               FilledButton.tonalIcon(
                 onPressed: () => _editSubject(context),
                 icon: const Icon(Icons.add),
@@ -913,6 +1286,57 @@ class SettingsView extends StatelessWidget {
                   ),
                 ),
               ),
+            const SizedBox(height: 20),
+            const _SettingsSectionHeader(
+                icon: Icons.backup_outlined,
+                title: 'Backup',
+                subtitle: 'Esporta o ripristina materie, orario e impostazioni',
+                accent: AppPalette.teal),
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: Column(children: [
+                ListTile(
+                  leading: const Icon(Icons.upload_outlined),
+                  title: const Text('Esporta configurazione'),
+                  subtitle: const Text(
+                      'Materie, colori, professori, aule, campanelle e impostazioni. Le credenziali non vengono mai incluse.'),
+                  onTap: () => _exportConfig(context),
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                ListTile(
+                  leading: const Icon(Icons.download_outlined),
+                  title: const Text('Importa configurazione'),
+                  subtitle: const Text(
+                      'Ripristina un file JSON esportato in precedenza.'),
+                  onTap: () => _importConfig(context),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 20),
+            _SettingsSectionHeader(
+                icon: Icons.warning_amber_outlined,
+                title: 'Zona pericolosa',
+                subtitle: 'Operazioni irreversibili sui dati dell’app',
+                accent: Theme.of(context).colorScheme.error),
+            Card(
+              child: ListTile(
+                leading: Icon(Icons.delete_forever_outlined,
+                    color: Theme.of(context).colorScheme.error),
+                title: Text('Elimina tutti i dati',
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.error)),
+                subtitle: const Text(
+                    'Orario, materie, compiti, dati ClasseViva e sessione collegata.'),
+                trailing: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.error,
+                    foregroundColor: Theme.of(context).colorScheme.onError,
+                  ),
+                  onPressed: () => _clearAllData(context),
+                  child: const Text('Elimina'),
+                ),
+              ),
+            ),
           ],
         ),
       );
@@ -931,6 +1355,7 @@ class SettingsView extends StatelessWidget {
           subtitle: rooms
               ? 'Spazi usati nelle lezioni'
               : 'Docenti e ITP associabili alle materie',
+          accent: rooms ? AppPalette.teal : AppPalette.amber,
         )),
         FilledButton.tonalIcon(
           onPressed: () => _editResource(context, category),
@@ -1003,14 +1428,23 @@ class SettingsView extends StatelessWidget {
 
 class _SettingsSectionHeader extends StatelessWidget {
   const _SettingsSectionHeader(
-      {required this.icon, required this.title, required this.subtitle});
+      {required this.icon,
+      required this.title,
+      required this.subtitle,
+      this.accent});
   final IconData icon;
   final String title;
   final String subtitle;
+  final Color? accent;
 
   @override
   Widget build(BuildContext context) => Row(children: [
-        CircleAvatar(radius: 19, child: Icon(icon, size: 20)),
+        CircleAvatar(
+            radius: 19,
+            backgroundColor: accent,
+            foregroundColor:
+                accent == null ? null : Colors.white,
+            child: Icon(icon, size: 20)),
         const SizedBox(width: 11),
         Expanded(
             child:
@@ -1043,6 +1477,7 @@ class SubjectEditorDialog extends StatefulWidget {
 class _SubjectEditorDialogState extends State<SubjectEditorDialog> {
   late final TextEditingController _name;
   late final TextEditingController _hex;
+  late final TextEditingController _classvivaId;
   late final Set<String> _teachers;
   late final Set<String> _rooms;
   late int _color;
@@ -1054,6 +1489,7 @@ class _SubjectEditorDialogState extends State<SubjectEditorDialog> {
     final subject = widget.subject;
     _color = subject?.colorValue ?? widget.initialColor ?? 0xFF6750A4;
     _name = TextEditingController(text: subject?.name ?? '');
+    _classvivaId = TextEditingController(text: subject?.classvivaId ?? '');
     _hex = TextEditingController(
         text: '#${_color.toRadixString(16).padLeft(8, '0').toUpperCase()}');
     _teachers = {...?subject?.teachers};
@@ -1064,6 +1500,7 @@ class _SubjectEditorDialogState extends State<SubjectEditorDialog> {
   void dispose() {
     _name.dispose();
     _hex.dispose();
+    _classvivaId.dispose();
     super.dispose();
   }
 
@@ -1133,6 +1570,13 @@ class _SubjectEditorDialogState extends State<SubjectEditorDialog> {
                         borderRadius: BorderRadius.circular(8))),
               ),
               const SizedBox(height: 12),
+              TextField(
+                  controller: _classvivaId,
+                  decoration: const InputDecoration(
+                      labelText: 'Nome o ID materia su ClasseViva',
+                      hintText: 'Es. MATEMATICA — per abbinare gli eventi',
+                      prefixIcon: Icon(Icons.link_outlined))),
+              const SizedBox(height: 12),
               _ResourceSelection(
                   label: 'Professori',
                   options: {...widget.availableTeachers, ..._teachers},
@@ -1163,6 +1607,7 @@ class _SubjectEditorDialogState extends State<SubjectEditorDialog> {
                           'subject-${DateTime.now().microsecondsSinceEpoch}',
                       name: _name.text,
                       colorValue: _color,
+                      classvivaId: _classvivaId.text.trim(),
                       teachers: _teachers.toList(),
                       rooms: _rooms.toList(),
                     )),
@@ -1377,23 +1822,48 @@ class ClassVivaImportView extends StatefulWidget {
     super.key,
     required this.importController,
     required this.timetableController,
+    required this.schoolDataController,
   });
   final ImportController importController;
   final TimetableController timetableController;
+  final SchoolDataController schoolDataController;
 
   @override
   State<ClassVivaImportView> createState() => _ClassVivaImportViewState();
 }
 
 class _ClassVivaImportViewState extends State<ClassVivaImportView> {
-  final _username = TextEditingController();
-  final _password = TextEditingController();
+  bool? _hasSession;
 
   @override
-  void dispose() {
-    _username.dispose();
-    _password.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _checkSession();
+  }
+
+  Future<void> _checkSession() async {
+    final session = await widget.importController.hasSession();
+    if (mounted) setState(() => _hasSession = session);
+  }
+
+  /// Le pagine che richiedono ClasseViva reindirizzano al login
+  /// centralizzato (lo stesso mostrato nelle Impostazioni).
+  Future<void> _openLogin() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: const Text('Accedi a ClasseViva')),
+        body: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            ClassVivaLoginView(
+              controller: widget.schoolDataController,
+              onSignedIn: () => Navigator.of(context).pop(),
+            ),
+          ],
+        ),
+      ),
+    ));
+    await _checkSession();
   }
 
   @override
@@ -1401,6 +1871,34 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
         animation: widget.importController,
         builder: (context, _) {
           final controller = widget.importController;
+          if (_hasSession == false) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.link_off_outlined, size: 48),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Per importare l’orario devi prima collegare il tuo account ClasseViva.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppPalette.classeViva,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: _openLogin,
+                      icon: const Icon(Icons.login),
+                      label: const Text('Accedi a ClasseViva'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
           final proposal = controller.proposal;
           final subjectNames = proposal == null
               ? <String, String>{}
@@ -1412,7 +1910,7 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
             padding: const EdgeInsets.all(20),
             children: [
               const Text(
-                'Importa le lezioni della settimana precedente. La sessione resta nel portachiavi sicuro del dispositivo; la password non viene conservata.',
+                'Importa le lezioni della settimana precedente usando la sessione ClasseViva salvata.',
               ),
               Align(
                 alignment: Alignment.centerRight,
@@ -1423,26 +1921,8 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
                 ),
               ),
               const SizedBox(height: 16),
-              TextField(
-                controller: _username,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Codice utente ClasseViva',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _password,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Password',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: controller.isLoading ? null : _loadProposal,
+                onPressed: controller.isLoading ? null : _useSavedSession,
                 icon: controller.isLoading
                     ? const SizedBox(
                         width: 18,
@@ -1451,11 +1931,6 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
                       )
                     : const Icon(Icons.download),
                 label: const Text('Recupera lezioni'),
-              ),
-              OutlinedButton.icon(
-                onPressed: controller.isLoading ? null : _useSavedSession,
-                icon: const Icon(Icons.lock_open),
-                label: const Text('Usa sessione salvata'),
               ),
               if (controller.error != null) ...[
                 const SizedBox(height: 12),
@@ -1471,6 +1946,11 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
                 Text(
                   'Bozza: ${proposal.lessons.length} lezioni',
                   style: Theme.of(context).textTheme.titleLarge,
+                ),
+                OutlinedButton.icon(
+                  onPressed: _guessPeriodTimes,
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                  label: const Text('Stima campanelle dalle lezioni'),
                 ),
                 const SizedBox(height: 8),
                 ...proposal.lessons.map(
@@ -1519,13 +1999,6 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
           );
         },
       );
-
-  Future<void> _loadProposal() async {
-    await widget.importController.signInAndBuildProposal(
-      username: _username.text.trim(),
-      password: _password.text,
-    );
-  }
 
   Future<void> _useSavedSession() async {
     await widget.importController.useSavedSession();
@@ -1580,6 +2053,60 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
     if (configured == null || !mounted) return;
     try {
       await widget.importController.savePeriodTimes(configured);
+    } catch (error) {
+      if (mounted) _message(context, error.toString());
+    }
+  }
+
+  Future<void> _guessPeriodTimes() async {
+    final guesses = await widget.importController.guessPeriodTimes();
+    if (guesses.isEmpty || !mounted) {
+      if (mounted) _message(context, 'Non ci sono lezioni da cui stimare le ore.');
+      return;
+    }
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Stima campanelle'),
+        content: SizedBox(
+          width: 520,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const Text(
+                'Il numero di ore viene dalle lezioni ClasseViva. Per gli orari mancanti uso le campanelle già configurate; altrimenti stimo lezione da 60 minuti dalle 08:00, con 10 minuti di intervallo. Potrai correggere la stima in Impostazioni.',
+              ),
+              const SizedBox(height: 12),
+              for (var weekday = 1; weekday <= 7; weekday++)
+                if (guesses.any((period) => period.weekday == weekday))
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(_dayNames[weekday - 1]),
+                    subtitle: Text(guesses
+                        .where((period) => period.weekday == weekday)
+                        .map((period) =>
+                            '${period.number}ª ${_clock(period.startMinute)}–${_clock(period.endMinute)}')
+                        .join(' · ')),
+                  ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annulla'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Salva stima'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    try {
+      await widget.importController.savePeriodTimes(guesses);
     } catch (error) {
       if (mounted) _message(context, error.toString());
     }

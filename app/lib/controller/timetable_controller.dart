@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import '../model/contracts/timetable_repository.dart';
@@ -180,6 +182,23 @@ class TimetableController extends ChangeNotifier {
     await load();
   }
 
+  /// Esporta la configurazione (materie, lezioni, campanelle, risorse,
+  /// impostazioni) come stringa JSON. Credenziali e dati ClasseViva non
+  /// vengono inclusi.
+  Future<String> exportConfigJson() async =>
+      jsonEncode(await _repository.exportConfig());
+
+  /// Importa la configurazione da una stringa JSON prodotta da
+  /// [exportConfigJson]. Solleva [FormatException] se non valida.
+  Future<void> importConfigJson(String json) async {
+    final decoded = jsonDecode(json);
+    if (decoded is! Map || decoded['version'] == null) {
+      throw const FormatException('File di configurazione non valido.');
+    }
+    await _repository.importConfig(decoded.cast<String, Object?>());
+    await load();
+  }
+
   Future<void> saveSubject(Subject subject) async {
     await _ensureResourceNames(ResourceCategory.teacher, subject.teachers);
     await _ensureResourceNames(ResourceCategory.room, subject.rooms);
@@ -237,6 +256,11 @@ class TimetableController extends ChangeNotifier {
 
   Future<void> deleteSubject(String id) async {
     await _repository.deleteSubject(id);
+    await load();
+  }
+
+  Future<void> clearAllData() async {
+    await _repository.clearAll();
     await load();
   }
 
