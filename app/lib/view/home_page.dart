@@ -12,8 +12,11 @@ import '../model/entities/lesson.dart';
 import '../model/entities/subject.dart';
 import '../model/entities/period_time.dart';
 import '../model/entities/classroom_resource.dart';
+import '../model/services/app_analytics.dart';
 import '../model/services/distinct_subject_color_selector.dart';
 import '../util/text_file_download.dart';
+import '../util/update_checker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'app_palette.dart';
 import 'classviva_login_view.dart';
 import 'debug_metadata_view.dart';
@@ -26,11 +29,13 @@ class HomePage extends StatefulWidget {
     required this.importController,
     required this.schoolDataController,
     required this.themeController,
+    required this.analytics,
   });
   final TimetableController timetableController;
   final ImportController importController;
   final SchoolDataController schoolDataController;
   final ThemeController themeController;
+  final AppAnalytics analytics;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -41,11 +46,47 @@ class _HomePageState extends State<HomePage> {
   int _displayedDay = DateTime.now().weekday.clamp(1, 5);
   bool _dayMode = false;
 
+  static const _screenNames = ['home', 'orario', 'agenda', 'voti', 'altro'];
+
   @override
   void initState() {
     super.initState();
     widget.timetableController.load();
     widget.schoolDataController.loadLocal();
+    widget.analytics.screenView(_screenNames[_tab]);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _checkForUpdates());
+  }
+
+  /// Controllo non bloccante delle release su GitHub: se c'è una versione
+  /// più recente propone di aprire la pagina della release.
+  Future<void> _checkForUpdates() async {
+    final update = await UpdateChecker(
+            repo: 'samuele-brusegan/school-manager')
+        .check();
+    if (update == null || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Aggiornamento disponibile'),
+        content: Text(
+            'È disponibile la versione ${update.version}. L’aggiornamento non è obbligatorio.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Ignora'),
+          ),
+          FilledButton(
+            onPressed: () {
+              launchUrl(update.url,
+                  mode: LaunchMode.externalApplication);
+              Navigator.pop(context);
+            },
+            child: const Text('Scarica'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -63,6 +104,7 @@ class _HomePageState extends State<HomePage> {
                       importController: widget.importController,
                       timetableController: widget.timetableController,
                       schoolDataController: widget.schoolDataController,
+                      analytics: widget.analytics,
                     ),
                   ),
                 )),
@@ -78,6 +120,7 @@ class _HomePageState extends State<HomePage> {
                     themeController: widget.themeController,
                     importController: widget.importController,
                     schoolDataController: widget.schoolDataController,
+                    analytics: widget.analytics,
                   ),
                 ),
               )),
@@ -128,7 +171,10 @@ class _HomePageState extends State<HomePage> {
             : null,
         bottomNavigationBar: NavigationBar(
           selectedIndex: _tab,
-          onDestinationSelected: (value) => setState(() => _tab = value),
+          onDestinationSelected: (value) {
+            setState(() => _tab = value);
+            widget.analytics.screenView(_screenNames[value]);
+          },
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.home_outlined),
@@ -212,6 +258,7 @@ class _HomePageState extends State<HomePage> {
         subject: subject.text,
         dueDate: dueDate,
       );
+      widget.analytics.event('add_task');
     }
     title.dispose();
     subject.dispose();
@@ -916,11 +963,13 @@ class SettingsView extends StatelessWidget {
     required this.themeController,
     required this.importController,
     required this.schoolDataController,
+    required this.analytics,
   });
   final TimetableController controller;
   final ThemeController themeController;
   final ImportController importController;
   final SchoolDataController schoolDataController;
+  final AppAnalytics analytics;
 
   Future<void> _configureDay(BuildContext context, int weekday) async {
     final periods = await showDialog<List<PeriodTime>>(
@@ -1024,6 +1073,7 @@ class SettingsView extends StatelessWidget {
       if (kIsWeb) {
         downloadTextFile('school_manager_config.json', json);
         if (context.mounted) {
+          analytics.event('export_config');
           _message(context, 'Configurazione esportata.');
         }
         return;
@@ -1036,6 +1086,7 @@ class SettingsView extends StatelessWidget {
         bytes: utf8.encode(json),
       );
       if (!context.mounted) return;
+      if (saved != null) analytics.event('export_config');
       _message(context, saved == null
           ? 'Esportazione annullata.'
           : 'Configurazione esportata.');
@@ -1076,6 +1127,7 @@ class SettingsView extends StatelessWidget {
       if (confirmed != true || !context.mounted) return;
       await controller.importConfigJson(utf8.decode(bytes));
       if (context.mounted) {
+        analytics.event('import_config');
         _message(context, 'Configurazione importata.');
       }
     } on FormatException catch (error) {
@@ -1205,6 +1257,7 @@ class SettingsView extends StatelessWidget {
                               importController: importController,
                               timetableController: controller,
                               schoolDataController: schoolDataController,
+                              analytics: analytics,
                             ),
                           ),
                         )),
@@ -1864,10 +1917,12 @@ class ClassVivaImportView extends StatefulWidget {
     required this.importController,
     required this.timetableController,
     required this.schoolDataController,
+    required this.analytics,
   });
   final ImportController importController;
   final TimetableController timetableController;
   final SchoolDataController schoolDataController;
+  final AppAnalytics analytics;
 
   @override
   State<ClassVivaImportView> createState() => _ClassVivaImportViewState();
@@ -2080,6 +2135,7 @@ class _ClassVivaImportViewState extends State<ClassVivaImportView> {
       );
       widget.importController.discard();
       if (!mounted) return;
+      widget.analytics.event('apply_import');
       _message(context, 'Orario aggiornato.');
     } catch (error) {
       if (mounted) _message(context, error.toString());

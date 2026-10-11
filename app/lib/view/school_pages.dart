@@ -674,7 +674,7 @@ Future<void> _showDetails(
                     DebugInfoText(debugRecordText(record)),
                   if (task != null)
                     DebugInfoText(
-                        'task id: ${task!.id}  done: ${task!.isDone}  subject: "${task!.subject}"'),
+                        'task id: ${task.id}  done: ${task.isDone}  subject: "${task.subject}"'),
                   DebugInfoText(
                       'matched subject: ${subject?.name ?? '-'} (id: ${subject?.id ?? '-'}, classviva_id: ${subject?.classvivaId ?? '-'})'),
                 ],

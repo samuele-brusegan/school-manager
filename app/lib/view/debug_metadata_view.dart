@@ -7,6 +7,7 @@ import '../controller/school_data_controller.dart';
 import '../controller/timetable_controller.dart';
 import '../model/contracts/classviva_data_gateway.dart';
 import '../model/entities/classviva_record.dart';
+import '../model/entities/timetable.dart';
 import '../model/services/subject_matcher.dart';
 import 'agenda_view.dart';
 
@@ -14,6 +15,16 @@ import 'agenda_view.dart';
 /// quando l'overlay di debug è attivo.
 String debugRecordText(ClassVivaRecord record) =>
     'id: ${record.id}\nvalues: ${jsonEncode(record.values)}';
+
+/// Materia abbinata e motivazione del match (o dei fallimenti), da
+/// mostrare inline quando l'overlay di debug è attivo.
+String debugMatchTrace(ClassVivaRecord record, Timetable? timetable) {
+  final matcher = SubjectMatcher(timetable?.subjects ?? const []);
+  final (subject, trace) =
+      matchRecordSubjectTraced(record, matcher, timetable);
+  return 'matched: ${subject?.name ?? '-'} (${subject?.id ?? '-'})\n'
+      'match: ${trace.join(' → ')}';
+}
 
 /// Blocco monospace per i metadati di debug inline nelle viste.
 class DebugInfoText extends StatelessWidget {
@@ -101,9 +112,11 @@ class DebugMetadataView extends StatelessWidget {
         buffer.writeln('     content: ${record.content}');
         buffer.writeln('     typeLabel(evtCode): ${record.typeLabel}');
         buffer.writeln('     begin: ${record.begin}  end: ${record.end}');
-        final subject = matchRecordSubject(record, matcher, timetable);
+        final (subject, trace) =
+            matchRecordSubjectTraced(record, matcher, timetable);
         buffer.writeln(
             '     materia abbinata: ${subject?.name ?? '-'} (id: ${subject?.id ?? '-'})');
+        buffer.writeln('     match: ${trace.join(' → ')}');
         final keyword = hasSchoolKeywordText(
             '${record.title} ${record.subtitle} ${record.content ?? ''}');
         final flag = schoolDataController.testFlags[record.id];

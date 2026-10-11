@@ -15,6 +15,7 @@ import 'model/infrastructure/sqlite_timetable_repository.dart';
 import 'model/infrastructure/sqlite_theme_preference_repository.dart';
 import 'model/infrastructure/classviva_rest_gateway.dart';
 import 'model/infrastructure/secure_credential_store.dart';
+import 'model/services/app_analytics.dart';
 import 'model/services/import_proposal_builder.dart';
 import 'view/app_palette.dart';
 import 'view/home_page.dart';
@@ -65,12 +66,14 @@ Future<void> main() async {
     sessionGateway: classVivaGateway,
     repository: schoolDataRepository,
   );
+  final analytics = await AppAnalytics.init();
   runApp(
     SchoolManagerApp(
       timetableController: timetableController,
       importController: importController,
       schoolDataController: schoolDataController,
       themeController: themeController,
+      analytics: analytics,
     ),
   );
 }
@@ -82,12 +85,14 @@ class SchoolManagerApp extends StatelessWidget {
     required this.importController,
     required this.schoolDataController,
     required this.themeController,
+    required this.analytics,
   });
 
   final TimetableController timetableController;
   final ImportController importController;
   final SchoolDataController schoolDataController;
   final ThemeController themeController;
+  final AppAnalytics analytics;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -118,6 +123,7 @@ class SchoolManagerApp extends StatelessWidget {
             importController: importController,
             schoolDataController: schoolDataController,
             themeController: themeController,
+            analytics: analytics,
           ),
         ),
       );

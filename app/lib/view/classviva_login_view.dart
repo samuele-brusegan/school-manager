@@ -37,7 +37,7 @@ class _ClassVivaLoginViewState extends State<ClassVivaLoginView> {
     TextInput.finishAutofillContext();
     await widget.controller.signInAndRefresh(
       username: _username.text.trim(),
-      password: _password.text,
+      password: _password.text.trim(),
     );
     _password.clear();
     widget.onSignedIn?.call();
@@ -76,6 +76,9 @@ class _ClassVivaLoginViewState extends State<ClassVivaLoginView> {
                   TextField(
                     controller: _password,
                     obscureText: true,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    keyboardType: TextInputType.visiblePassword,
                     autofillHints: const [AutofillHints.password],
                     textInputAction: TextInputAction.done,
                     onSubmitted: (_) =>

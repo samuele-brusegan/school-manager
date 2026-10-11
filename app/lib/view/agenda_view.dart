@@ -45,59 +45,159 @@ bool hasSchoolKeywordText(String text) {
   return schoolTestKeywords.any(normalized.contains);
 }
 
-/// Risolve la materia locale di un record ClasseViva: nome remoto, poi
-/// ID remoto, titolo (es. "Verifica su dart" contiene "Dart"), e infine
-/// si indovina dalla lezione prevista a quell'ora o dal docente.
+/// Confronta due nomi di docente ignorando maiuscole e l'ordine delle
+/// parole ("VIGLIETTI GRAZIELLA" == "graziella viglietti"). Matcha anche
+/// le abbreviazioni: un insieme di parole contenuto nell'altro conta
+/// come corrispondenza ("BEGOLO M." vs "BEGOLO MARCO" no, ma
+/// "VIGLIETTI" vs "VIGLIETTI GRAZIELLA" sì).
+bool teacherNamesMatch(String a, String b) {
+  Set<String> tokens(String name) => name
+      .toLowerCase()
+      .split(RegExp(r'[^a-zà-öø-ÿ0-9]+'))
+      .where((t) => t.isNotEmpty)
+      .toSet();
+  final ta = tokens(a);
+  final tb = tokens(b);
+  if (ta.isEmpty || tb.isEmpty) return false;
+  return ta.containsAll(tb) || tb.containsAll(ta);
+}
+
+/// Risolve la materia locale di un record ClasseViva.
+/// 1. Se il record ha subjectId o subjectDesc, si usano quelli.
+/// 2. Altrimenti si guarda il docente: con una sola materia associata la
+///    risposta è diretta; con più materie si cerca la lezione in orario a
+///    quell'ora tenuta da quel docente.
+/// 3. Ultima spiaggia: il titolo del record (es. "Verifica su dart").
 Subject? matchRecordSubject(ClassVivaRecord record, SubjectMatcher matcher,
-    Timetable? timetable) {
+        Timetable? timetable) =>
+    matchRecordSubjectTraced(record, matcher, timetable).$1;
+
+/// Come [matchRecordSubject], ma restituisce anche il "percorso" del
+/// match: quale passo ha risolto la materia o perché ogni tentativo è
+/// fallito. Usato dall'overlay di debug.
+(Subject?, List<String>) matchRecordSubjectTraced(
+    ClassVivaRecord record, SubjectMatcher matcher, Timetable? timetable) {
+  final trace = <String>[];
+  final remoteId = '${record.values['subjectId'] ?? ''}'.trim();
+  if (remoteId.isEmpty) {
+    trace.add('subjectId assente');
+  } else {
+    final byId = matcher.matchId(remoteId);
+    if (byId != null) {
+      trace.add('subjectId "$remoteId" -> ${byId.name}');
+      return (byId, trace);
+    }
+    trace.add('subjectId "$remoteId" senza match locale');
+  }
   final name = record.subjectName;
-  if (name != null && name.isNotEmpty) {
+  if (name == null || name.isEmpty) {
+    trace.add('subjectDesc assente');
+  } else {
     final byName = matcher.match(name);
-    if (byName != null) return byName;
+    if (byName != null) {
+      trace.add('subjectDesc "$name" -> ${byName.name}');
+      return (byName, trace);
+    }
+    trace.add('subjectDesc "$name" non riconosciuta');
   }
-  final byId = matcher.matchId('${record.values['subjectId'] ?? ''}');
-  if (byId != null) return byId;
-  final title = record.title;
-  if (title.isNotEmpty) {
-    final byTitle = matcher.match(title);
-    if (byTitle != null) return byTitle;
-  }
-  if (timetable == null) return null;
-  // Stima dall'orario: la lezione in corso in quel giorno a quell'ora.
-  final begin = record.begin;
-  if (begin != null) {
-    final minute = begin.hour * 60 + begin.minute;
-    final atTime = timetable.lessons
-        .where((lesson) =>
-            lesson.weekday == begin.weekday &&
-            minute >= lesson.startMinute &&
-            minute < lesson.endMinute)
+  var teacherCandidates = const <Subject>[];
+  final teacher = record.teacherName?.trim();
+  if (timetable == null) {
+    trace.add('orario non caricato: docente ignorato');
+  } else if (teacher == null || teacher.isEmpty) {
+    trace.add('docente assente');
+  } else {
+    bool namesMatch(String declared) =>
+        teacherNamesMatch(declared, teacher);
+
+    final candidates = timetable.subjects
+        .where((subject) => subject.teachers.any(namesMatch))
         .toList();
-    for (final lesson in atTime) {
-      for (final subject in timetable.subjects) {
-        if (subject.id == lesson.subjectId) return subject;
+    teacherCandidates = candidates;
+    if (candidates.isEmpty) {
+      trace.add('docente "$teacher" non associato ad alcuna materia');
+    } else if (candidates.length == 1) {
+      trace.add(
+          'docente "$teacher" ha una sola materia -> ${candidates.single.name}');
+      return (candidates.single, trace);
+    } else {
+      // Il docente insegna più materie: l'evento indica a che ora si
+      // tiene, e in orario a quell'ora c'è la sua lezione.
+      trace.add(
+          'docente "$teacher" ambiguo (${candidates.map((s) => s.name).join(', ')})');
+      final begin = record.begin;
+      if (begin == null) {
+        trace.add('evento senza orario: slot non verificabile');
+      } else {
+        final minute = begin.hour * 60 + begin.minute;
+        final candidateIds = candidates.map((s) => s.id).toSet();
+        var slotFound = false;
+        for (final lesson in timetable.lessons) {
+          final sameSlot = lesson.weekday == begin.weekday &&
+              minute >= lesson.startMinute &&
+              minute < lesson.endMinute;
+          if (!sameSlot) continue;
+          if (lesson.teachers.any(namesMatch) ||
+              candidateIds.contains(lesson.subjectId)) {
+            for (final subject in candidates) {
+              if (subject.id == lesson.subjectId) {
+                trace.add(
+                    'lezione di ${subject.name} in orario a quell’ora -> ${subject.name}');
+                return (subject, trace);
+              }
+            }
+          }
+          slotFound = true;
+        }
+        trace.add(slotFound
+            ? 'a quell’ora c’è una lezione di un altro docente/materia'
+            : 'nessuna lezione in orario a quell’ora');
+        // L'evento può essere stato messo in un'ora sbagliata: guardo
+        // tutte le lezioni del docente in quel giorno. Se tra le sue
+        // candidate ne insegna una sola, quella è la materia.
+        final todaysSubjects = timetable.lessons
+            .where((lesson) =>
+                lesson.weekday == begin.weekday &&
+                (lesson.teachers.any(namesMatch) ||
+                    candidateIds.contains(lesson.subjectId)))
+            .map((lesson) => lesson.subjectId)
+            .where(candidateIds.contains)
+            .toSet();
+        if (todaysSubjects.length == 1) {
+          final subject =
+              candidates.firstWhere((s) => s.id == todaysSubjects.single);
+          trace.add(
+              'quel giorno il docente ha solo ${subject.name} tra le candidate -> ${subject.name}');
+          return (subject, trace);
+        }
+        trace.add(todaysSubjects.isEmpty
+            ? 'quel giorno nessuna lezione del docente in orario'
+            : 'quel giorno il docente ha più lezioni tra le candidate: slot non risolutivo');
       }
     }
   }
-  // Stima dal docente: una sola materia dichiara quel professore.
-  final teacher = record.teacherName;
-  if (teacher != null) {
-    final needle = teacher.toLowerCase();
-    Subject? found;
-    for (final subject in timetable.subjects) {
-      final matches = subject.teachers.any((name) {
-        final normalized = name.toLowerCase();
-        return normalized.isNotEmpty &&
-            (normalized.contains(needle) || needle.contains(normalized));
-      });
-      if (matches) {
-        if (found != null) return null; // ambiguo: più materie
-        found = subject;
-      }
+  // Ultima spiaggia: il testo del titolo (il compito può essere stato
+  // inserito in un'ora diversa o l'orario può essere cambiato).
+  final title = record.title;
+  if (title.isEmpty) {
+    trace.add('titolo assente');
+  } else {
+    final byTitle = matcher.match(title);
+    if (byTitle != null) {
+      trace.add('titolo "$title" -> ${byTitle.name}');
+      return (byTitle, trace);
     }
-    return found;
+    trace.add('titolo "$title" senza match');
   }
-  return null;
+  // Ultimissima spiaggia: se il docente aveva candidate, vince la prima
+  // dell'array (ordine di salvataggio nel DB).
+  if (teacherCandidates.isNotEmpty) {
+    final fallback = teacherCandidates.first;
+    trace.add(
+        'fallback: prima materia del docente -> ${fallback.name}');
+    return (fallback, trace);
+  }
+  return (null, trace);
 }
 
 class _AgendaViewState extends State<AgendaView> {
@@ -549,12 +649,15 @@ class _AgendaViewState extends State<AgendaView> {
                           style:
                               TextStyle(color: foreground, fontSize: 11),
                         ),
-                      if (entry.content != null &&
-                          entry.content != entry.title)
+                      // Testo del compito/evento: spesso coincide con il
+                      // titolo (es. i "notes" dei compiti AGHW), quindi si
+                      // mostra il primo tra contenuto e titolo diverso
+                      // dall'etichetta di materia.
+                      if (_entryBody(entry) != null)
                         Expanded(
                           child: Text(
-                            entry.content!,
-                            maxLines: 3,
+                            _entryBody(entry)!,
+                            maxLines: 4,
                             overflow: TextOverflow.ellipsis,
                             style:
                                 TextStyle(color: foreground, fontSize: 11),
@@ -566,6 +669,17 @@ class _AgendaViewState extends State<AgendaView> {
         ),
       ),
     );
+  }
+
+  /// Testo descrittivo del blocco: contenuto o titolo, purché diverso
+  /// dall'etichetta già mostrata (materia o titolo stesso).
+  String? _entryBody(_AgendaEntry entry) {
+    for (final text in [entry.content, entry.title]) {
+      if (text != null && text.isNotEmpty && text != entry.label) {
+        return text;
+      }
+    }
+    return null;
   }
 
   void _showEntryDetails(BuildContext context, _AgendaEntry entry) {
@@ -615,7 +729,9 @@ class _AgendaViewState extends State<AgendaView> {
               const Divider(height: 20),
               DebugInfoText([
                 'id: ${entry.id}',
-                'matched: ${entry.subject?.name ?? '-'} (${entry.subject?.id ?? '-'}, cv: ${entry.subject?.classvivaId ?? '-'})',
+                if (entry.record != null)
+                  debugMatchTrace(
+                      entry.record!, widget.timetableController.timetable),
                 'keyword: ${entry.hasSchoolKeyword}  override: ${entry.testOverride}  isTest: ${entry.isTest}',
                 'typeLabel: ${entry.record?.typeLabel ?? '-'}',
                 if (entry.record != null) debugRecordText(entry.record!),
@@ -929,7 +1045,7 @@ class _AgendaViewState extends State<AgendaView> {
           ),
           if (debug)
             DebugInfoText(
-                'matched: ${entry.subject?.name ?? '-'} (${entry.subject?.id ?? '-'})\n${debugRecordText(entry.record!)}'),
+                '${debugMatchTrace(entry.record!, widget.timetableController.timetable)}\n${debugRecordText(entry.record!)}'),
         ],
       ),
       onTap: () => _showEntryDetails(context, entry),

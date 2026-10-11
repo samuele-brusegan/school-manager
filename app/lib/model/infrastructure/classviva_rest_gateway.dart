@@ -49,11 +49,16 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
         401 => 'Credenziali ClasseViva non accettate.',
         403 => 'ClasseViva ha rifiutato l’accesso per questo account.',
         400 => 'ClasseViva non ha accettato la richiesta di accesso.',
+        422 => 'Codice utente o password errati '
+            '(controlla maiuscole, spazi e che il codice sia quello del profilo studente).',
         _ => 'Errore di accesso ClasseViva (${response.statusCode}).',
       };
-      throw ClassVivaException(
-        detail == null ? message : '$message\nDettaglio: $detail',
-      );
+      var full = detail == null ? message : '$message\nDettaglio: $detail';
+      final raw = response.body.trim();
+      if (raw.isNotEmpty && raw.length < 500 && detail == null) {
+        full = '$full\nRisposta: $raw';
+      }
+      throw ClassVivaException(full);
     }
     if (response.body.trim().isEmpty) {
       throw ClassVivaException(
