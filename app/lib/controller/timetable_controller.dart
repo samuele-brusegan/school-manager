@@ -48,6 +48,34 @@ class TimetableController extends ChangeNotifier {
       }
       timetable = Timetable(subjects: subjects, lessons: lessons);
       periodTimes = await _repository.getPeriodTimes();
+      // Migrazione: le vecchie configurazioni salvavano un orario per ogni
+      // giorno. Le campanelle sono ora condivise (weekday 0): il giorno con
+      // più ore fa da base e gli altri giorni diventano override sul solo
+      // numero di ore.
+      if (periodTimes.isNotEmpty &&
+          periodTimes.every((period) => period.weekday != 0)) {
+        final byDay = <int, List<PeriodTime>>{};
+        for (final period in periodTimes) {
+          byDay.putIfAbsent(period.weekday, () => []).add(period);
+        }
+        final base = byDay.values.reduce(
+            (a, b) => a.length >= b.length ? a : b)
+          ..sort((a, b) => a.number.compareTo(b.number));
+        final shared = [
+          for (final period in base)
+            PeriodTime(
+              number: period.number,
+              weekday: 0,
+              startMinute: period.startMinute,
+              endMinute: period.endMinute,
+            ),
+        ];
+        periodTimes = _propagateShared(
+          shared,
+          [...shared, ...periodTimes],
+        );
+        await _repository.savePeriodTimes(periodTimes);
+      }
       resources = await _repository.getResources();
       await _ensureCatalogValues(subjects, lessons);
       resources = await _repository.getResources();
@@ -275,6 +303,57 @@ class TimetableController extends ChangeNotifier {
     await load();
   }
 
+  /// Campanelle condivise tra tutti i giorni (weekday 0): gli orari delle
+  /// singole ore sono gli stessi ovunque, i giorni possono solo cambiare
+  /// il numero di ore.
+  List<PeriodTime> get sharedPeriods => periodTimes
+      .where((period) => period.weekday == 0)
+      .toList()
+    ..sort((a, b) => a.number.compareTo(b.number));
+
+  /// Cambia solo il numero di ore di un giorno: gli orari restano quelli
+  /// delle campanelle condivise. Se il numero coincide con quello condiviso
+  /// l'eventuale override viene rimosso, così il giorno segue sempre gli
+  /// orari comuni.
+  Future<void> setDayPeriodCount(int weekday, int count) async {
+    if (weekday < 1 || weekday > 7) {
+      throw ArgumentError('Giorno non valido.');
+    }
+    final shared = sharedPeriods;
+    if (shared.isEmpty) {
+      throw ArgumentError('Configura prima le campanelle condivise.');
+    }
+    final oldPeriods = await _repository.getPeriodTimes();
+    if (count == shared.length) {
+      await _commitPeriodTimes(
+          oldPeriods.where((period) => period.weekday != weekday).toList());
+      return;
+    }
+    final sharedByNumber = {for (final period in shared) period.number: period};
+    final existing = {
+      for (final period in oldPeriods.where((p) => p.weekday == weekday))
+        period.number: period
+    };
+    var nextStart = shared.last.endMinute;
+    final rows = <PeriodTime>[];
+    for (var number = 1; number <= count; number++) {
+      final start = sharedByNumber[number]?.startMinute ??
+          existing[number]?.startMinute ??
+          nextStart;
+      final end = sharedByNumber[number]?.endMinute ??
+          existing[number]?.endMinute ??
+          start + 60;
+      rows.add(PeriodTime(
+        number: number,
+        weekday: weekday,
+        startMinute: start,
+        endMinute: end > start ? end : start + 60,
+      ));
+      nextStart = rows.last.endMinute;
+    }
+    await savePeriodTimes(rows);
+  }
+
   Future<void> savePeriodTimes(List<PeriodTime> periods) async {
     if (periods.isEmpty) {
       throw ArgumentError('Configura almeno una campanella.');
@@ -286,7 +365,7 @@ class TimetableController extends ChangeNotifier {
     final configured = [...periods]
       ..sort((a, b) => a.number.compareTo(b.number));
     for (var index = 0; index < configured.length; index++) {
-      if (weekday != 0 && configured[index].number != index + 1) {
+      if (configured[index].number != index + 1) {
         throw ArgumentError(
             'Le ore devono partire dalla 1ª ora ed essere consecutive.');
       }
@@ -296,10 +375,52 @@ class TimetableController extends ChangeNotifier {
       }
     }
     final oldPeriods = await _repository.getPeriodTimes();
-    final allPeriods = [
+    var allPeriods = [
       ...oldPeriods.where((period) => period.weekday != weekday),
       ...periods,
-    ]..sort((a, b) => a.weekday != b.weekday
+    ];
+    if (weekday == 0) allPeriods = _propagateShared(configured, allPeriods);
+    await _commitPeriodTimes(allPeriods);
+  }
+
+  /// Quando cambiano le campanelle condivise, gli override dei giorni
+  /// conservano solo il numero di ore: gli orari vengono riallineati a
+  /// quelli comuni (le ore oltre le condivise mantengono il loro orario).
+  List<PeriodTime> _propagateShared(
+      List<PeriodTime> shared, List<PeriodTime> all) {
+    final sharedByNumber = {for (final period in shared) period.number: period};
+    final lastSharedEnd =
+        shared.isEmpty ? 8 * 60 : shared.last.endMinute;
+    final result = [...shared];
+    final overridenDays =
+        all.where((p) => p.weekday != 0).map((p) => p.weekday).toSet();
+    for (final weekday in overridenDays) {
+      final dayRows = all.where((p) => p.weekday == weekday).toList()
+        ..sort((a, b) => a.number.compareTo(b.number));
+      final oldByNumber = {for (final p in dayRows) p.number: p};
+      var nextStart = lastSharedEnd;
+      for (var number = 1; number <= dayRows.length; number++) {
+        final common = sharedByNumber[number];
+        final old = oldByNumber[number];
+        final start =
+            common?.startMinute ?? old?.startMinute ?? nextStart;
+        final end = common?.endMinute ?? old?.endMinute ?? start + 60;
+        result.add(PeriodTime(
+          number: number,
+          weekday: weekday,
+          startMinute: start,
+          endMinute: end > start ? end : start + 60,
+        ));
+        nextStart = result.last.endMinute;
+      }
+    }
+    return result..sort((a, b) => a.weekday != b.weekday
+        ? a.weekday.compareTo(b.weekday)
+        : a.number.compareTo(b.number));
+  }
+
+  Future<void> _commitPeriodTimes(List<PeriodTime> allPeriods) async {
+    allPeriods = [...allPeriods]..sort((a, b) => a.weekday != b.weekday
         ? a.weekday.compareTo(b.weekday)
         : a.number.compareTo(b.number));
     final current = timetable ?? Timetable(subjects: [], lessons: []);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../model/contracts/classviva_data_gateway.dart';
@@ -47,6 +49,35 @@ class SchoolDataController extends ChangeNotifier {
 
   /// Vero se esiste una sessione ClasseViva salvata o attiva.
   Future<bool> hasSession() => _sessionGateway.hasSession();
+
+  /// Testo di una comunicazione di bacheca, senza scaricare il PDF allegato.
+  Future<String> noticeboardText(ClassVivaRecord record) =>
+      _dataGateway.noticeboardText(record);
+
+  /// Allegato [index] di una comunicazione: byte in memoria, mai su disco.
+  Future<({String fileName, Uint8List bytes})> noticeboardAttachment(
+          ClassVivaRecord record, int index) =>
+      _dataGateway.noticeboardAttachment(record, index);
+
+  Timer? _autoRefreshTimer;
+
+  /// Configura l'aggiornamento automatico dei dati ClasseViva: ogni
+  /// [minutes] minuti i dati vengono ricaricati se esiste una sessione
+  /// salvata. Un valore <= 0 disattiva il timer.
+  void setAutoRefreshMinutes(int minutes) {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    if (minutes <= 0) return;
+    _autoRefreshTimer = Timer.periodic(
+      Duration(minutes: minutes),
+      (_) => _autoRefresh(),
+    );
+  }
+
+  Future<void> _autoRefresh() async {
+    if (isLoading || !await hasSession()) return;
+    await useSavedSession();
+  }
 
   Future<void> signInAndRefresh({
     required String username,

@@ -209,6 +209,40 @@ class _AgendaViewState extends State<AgendaView> {
   _AgendaMode? _mode;
   DateTime _selectedDate = _dateOnly(DateTime.now());
 
+  /// Swipe orizzontale tra periodi: ogni pagina mostra il giorno, la
+  /// settimana o il mese spostato di (indice - _pageAnchor) rispetto a
+  /// [_anchorDate].
+  static const _pageAnchor = 10000;
+  late final PageController _pageController =
+      PageController(initialPage: _pageAnchor);
+  DateTime _anchorDate = _dateOnly(DateTime.now());
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  DateTime _dateForOffset(_AgendaMode mode, int offset) => switch (mode) {
+        _AgendaMode.day => _anchorDate.add(Duration(days: offset)),
+        _AgendaMode.week => _anchorDate.add(Duration(days: 7 * offset)),
+        _AgendaMode.month =>
+          DateTime(_anchorDate.year, _anchorDate.month + offset, 1),
+        _AgendaMode.list => _anchorDate,
+      };
+
+  /// Sposta la vista su [date] riallineando l'ancora dello swipe, così la
+  /// pagina corrente mostra subito il nuovo periodo.
+  void _jumpTo(_AgendaMode mode, DateTime date) {
+    setState(() {
+      _anchorDate = _dateOnly(date);
+      _selectedDate = _anchorDate;
+    });
+    if (_pageController.hasClients) {
+      _pageController.jumpToPage(_pageAnchor);
+    }
+  }
+
   List<_AgendaEntry> _entries() {
     final matcher = SubjectMatcher(
         widget.timetableController.timetable?.subjects ?? const <Subject>[]);
@@ -267,7 +301,15 @@ class _AgendaViewState extends State<AgendaView> {
                           value: _AgendaMode.month, child: Text('Mese')),
                     ],
                     onChanged: (value) {
-                      if (value != null) setState(() => _mode = value);
+                      if (value != null) {
+                        setState(() {
+                          _mode = value;
+                          _anchorDate = _selectedDate;
+                        });
+                        if (_pageController.hasClients) {
+                          _pageController.jumpToPage(_pageAnchor);
+                        }
+                      }
                     },
                   ),
                 ],
@@ -275,12 +317,29 @@ class _AgendaViewState extends State<AgendaView> {
             ),
             if (mode != _AgendaMode.list) _dateNavigation(context, mode),
             Expanded(
-              child: switch (mode) {
-                _AgendaMode.list => _listView(entries),
-                _AgendaMode.day => _dayView(context, entries, _selectedDate),
-                _AgendaMode.week => _weekView(context, entries),
-                _AgendaMode.month => _monthView(context, entries),
-              },
+              child: mode == _AgendaMode.list
+                  ? _listView(entries)
+                  : PageView.builder(
+                      key: ValueKey(mode),
+                      controller: _pageController,
+                      onPageChanged: (index) => setState(() {
+                        _selectedDate =
+                            _dateForOffset(mode, index - _pageAnchor);
+                      }),
+                      itemBuilder: (context, index) {
+                        final date =
+                            _dateForOffset(mode, index - _pageAnchor);
+                        return switch (mode) {
+                          _AgendaMode.day =>
+                            _dayView(context, entries, date),
+                          _AgendaMode.week =>
+                            _weekView(context, entries, date),
+                          _AgendaMode.month =>
+                            _monthView(context, entries, date),
+                          _ => const SizedBox.shrink(),
+                        };
+                      },
+                    ),
             ),
           ],
         );
@@ -311,8 +370,7 @@ class _AgendaViewState extends State<AgendaView> {
                 style: Theme.of(context).textTheme.titleMedium),
           ),
           TextButton(
-            onPressed: () =>
-                setState(() => _selectedDate = _dateOnly(DateTime.now())),
+            onPressed: () => _jumpTo(mode, DateTime.now()),
             child: const Text('Oggi'),
           ),
           IconButton(
@@ -326,15 +384,16 @@ class _AgendaViewState extends State<AgendaView> {
   }
 
   void _move(int direction, _AgendaMode mode) {
-    setState(() {
-      _selectedDate = switch (mode) {
-        _AgendaMode.day => _selectedDate.add(Duration(days: direction)),
-        _AgendaMode.week => _selectedDate.add(Duration(days: 7 * direction)),
-        _AgendaMode.month => DateTime(
-            _selectedDate.year, _selectedDate.month + direction, 1),
-        _AgendaMode.list => _selectedDate,
-      };
-    });
+    _jumpTo(
+        mode,
+        switch (mode) {
+          _AgendaMode.day => _selectedDate.add(Duration(days: direction)),
+          _AgendaMode.week =>
+            _selectedDate.add(Duration(days: 7 * direction)),
+          _AgendaMode.month => DateTime(
+              _selectedDate.year, _selectedDate.month + direction, 1),
+          _AgendaMode.list => _selectedDate,
+        });
   }
 
   Widget _listView(List<_AgendaEntry> entries) {
@@ -411,8 +470,9 @@ class _AgendaViewState extends State<AgendaView> {
     );
   }
 
-  Widget _weekView(BuildContext context, List<_AgendaEntry> entries) {
-    final firstDay = _weekStart(_selectedDate);
+  Widget _weekView(
+      BuildContext context, List<_AgendaEntry> entries, DateTime weekDate) {
+    final firstDay = _weekStart(weekDate);
     final dayCount = switch (widget.themeController.weekendMode) {
       'none' => 5,
       'sunday' => 6,
@@ -784,10 +844,11 @@ class _AgendaViewState extends State<AgendaView> {
 
   // ---------- Vista mensile ----------
 
-  Widget _monthView(BuildContext context, List<_AgendaEntry> entries) {
-    final first = DateTime(_selectedDate.year, _selectedDate.month, 1);
+  Widget _monthView(
+      BuildContext context, List<_AgendaEntry> entries, DateTime monthDate) {
+    final first = DateTime(monthDate.year, monthDate.month, 1);
     final dayCount =
-        DateTime(_selectedDate.year, _selectedDate.month + 1, 0).day;
+        DateTime(monthDate.year, monthDate.month + 1, 0).day;
     final offset = first.weekday - 1;
     final cellCount = ((offset + dayCount + 6) ~/ 7) * 7;
     return LayoutBuilder(builder: (context, constraints) {
@@ -826,7 +887,7 @@ class _AgendaViewState extends State<AgendaView> {
                   return const SizedBox.shrink();
                 }
                 final date = DateTime(
-                    _selectedDate.year, _selectedDate.month, dayNumber);
+                    monthDate.year, monthDate.month, dayNumber);
                 final dayEntries = _forDate(entries, date);
                 final selected = _sameAgendaDate(date, _selectedDate);
                 final today = _sameAgendaDate(date, DateTime.now());

@@ -304,7 +304,7 @@ class SqliteTimetableRepository implements TimetableRepository {
 
 Future<Database> openTimetableDatabase(String path) => openDatabase(
       path,
-      version: 10,
+      version: 11,
       onCreate: (database, version) async {
         await database.execute(
           "CREATE TABLE subjects(id TEXT PRIMARY KEY, name TEXT NOT NULL, color_value INTEGER NOT NULL, classviva_id TEXT NOT NULL DEFAULT '', teachers_json TEXT NOT NULL DEFAULT '[]', rooms_json TEXT NOT NULL DEFAULT '[]')",
@@ -316,7 +316,7 @@ Future<Database> openTimetableDatabase(String path) => openDatabase(
           'CREATE TABLE period_times(weekday INTEGER NOT NULL DEFAULT 0 CHECK(weekday BETWEEN 0 AND 7), number INTEGER NOT NULL CHECK(number BETWEEN 1 AND 20), start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL CHECK(start_minute >= 0 AND end_minute <= 1440 AND start_minute < end_minute), PRIMARY KEY(weekday, number))',
         );
         await database.execute(
-            'CREATE TABLE classroom_resources(id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL CHECK(category IN (\'room\', \'teacher\')), type TEXT NOT NULL)');
+            'CREATE TABLE classroom_resources(id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL CHECK(category IN (\'room\', \'teacher\')), type TEXT NOT NULL, meta_json TEXT NOT NULL DEFAULT \'{}\')');
         await database.execute(
             'CREATE TABLE classviva_cache(section TEXT PRIMARY KEY, records_json TEXT NOT NULL, fetched_at TEXT NOT NULL)');
         await database.execute(
@@ -379,6 +379,14 @@ Future<Database> openTimetableDatabase(String path) => openDatabase(
         if (oldVersion < 10) {
           await database.execute(
               'CREATE TABLE IF NOT EXISTS event_flags(record_id TEXT PRIMARY KEY, is_test INTEGER NOT NULL)');
+        }
+        if (oldVersion < 11) {
+          final columns = await database
+              .rawQuery('PRAGMA table_info(classroom_resources)');
+          if (columns.every((column) => column['name'] != 'meta_json')) {
+            await database.execute(
+                "ALTER TABLE classroom_resources ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'");
+          }
         }
       },
       onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),

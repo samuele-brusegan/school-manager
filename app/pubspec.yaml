@@ -1,15 +1,14 @@
 name: school_manager
 description: Orario scolastico offline-first con importazione ClasseViva.
 publish_to: none
-version: 0.2.1+3
+version: 0.3.0+4
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
 
 dependencies:
+  archive: ^4.5.2
   file_picker: ^11.0.3
-  firebase_analytics: ^12.6.0
-  firebase_core: ^4.15.0
   flutter:
     sdk: flutter
   flutter_secure_storage: ^9.2.4
@@ -17,6 +16,7 @@ dependencies:
   package_info_plus: ^9.0.1
   path: ^1.9.0
   path_provider: ^2.1.5
+  pdfx: ^2.11.0
   sqflite: ^2.4.1
   sqflite_common_ffi_web: ^1.1.1
   url_launcher: ^6.3.3

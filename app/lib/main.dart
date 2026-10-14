@@ -66,6 +66,8 @@ Future<void> main() async {
     sessionGateway: classVivaGateway,
     repository: schoolDataRepository,
   );
+  schoolDataController
+      .setAutoRefreshMinutes(themeController.autoRefreshMinutes);
   final analytics = await AppAnalytics.init();
   runApp(
     SchoolManagerApp(
@@ -117,7 +119,11 @@ class SchoolManagerApp extends StatelessWidget {
             ),
             useMaterial3: true,
           ),
-          themeMode: themeController.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+          themeMode: switch (themeController.themeMode) {
+            'light' => ThemeMode.light,
+            'dark' => ThemeMode.dark,
+            _ => ThemeMode.system,
+          },
           home: HomePage(
             timetableController: timetableController,
             importController: importController,

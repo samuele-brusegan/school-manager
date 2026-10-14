@@ -224,11 +224,122 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
     }
     final decoded = jsonDecode(response.body);
     final rows = _recordRows(decoded).expand(_flattenNestedRecord).toList();
+    final label = _sectionLabel(section);
     return [
       for (var index = 0; index < rows.length; index++)
         _recordFromMap(section, rows[index], index),
-    ];
+        // Scarta i record fantasma senza alcun contenuto: righe vuote o
+        // contenitori annidati della risposta generano tile intitolate al
+        // nome della sezione ("Nota", "Documento"…) senza testo né data.
+    ].where((record) =>
+        record.title != label ||
+        record.subtitle.isNotEmpty ||
+        record.date != null).toList();
   }
+
+  @override
+  Future<String> noticeboardText(ClassVivaRecord record) async {
+    var (student, token) = await _session();
+    final pubId = record.values['pubId']?.toString() ?? record.id;
+    final code = record.values['evtCode']?.toString() ?? 'CF';
+    // L'ultimo segmento è la costante 101 ("segna come letta") e la
+    // richiesta non deve avere body: con un payload JSON l'API risponde
+    // 400 "invalid payload". L'endpoint accetta solo POST.
+    final uri = _baseUri.resolve(
+        'v1/students/$student/noticeboard/read/$code/$pubId/101');
+    Future<http.Response> fetch() => _client
+        .post(uri, headers: {..._headers, 'Z-Auth-Token': token})
+        .timeout(const Duration(seconds: 15));
+    var response = await fetch();
+    if (response.statusCode == 401 && await _reauthenticate()) {
+      (student, token) = (_studentId!, _token!);
+      response = await fetch();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ClassVivaException(
+        'Impossibile leggere la comunicazione (${response.statusCode}).',
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    final item = decoded is Map ? (decoded['item'] ?? decoded) : decoded;
+    if (item is! Map) return '';
+    final raw = (item['text'] ?? item['cntBody'] ?? item['body'] ?? '')
+        .toString();
+    return _stripHtml(raw);
+  }
+
+  @override
+  Future<({String fileName, Uint8List bytes})> noticeboardAttachment(
+      ClassVivaRecord record, int index) async {
+    var (student, token) = await _session();
+    final pubId = record.values['pubId']?.toString() ?? record.id;
+    final code = record.values['evtCode']?.toString() ?? 'CF';
+    // numOfFile è 1-based secondo l'API; le liste allegati degli item
+    // possono portare il numero esplicito in attachNum.
+    final attachments = record.values['attachments'];
+    int fileNum = index + 1;
+    if (attachments is List && index < attachments.length) {
+      final attach = attachments[index];
+      if (attach is Map) {
+        fileNum = int.tryParse(
+                '${attach['attachNum'] ?? attach['numOfFile'] ?? ''}') ??
+            fileNum;
+      }
+    }
+    final uri = _baseUri.resolve(
+        'v1/students/$student/noticeboard/attach/$code/$pubId/$fileNum');
+    Future<http.Response> fetch() => _client
+        .get(uri, headers: {..._headers, 'Z-Auth-Token': token})
+        .timeout(const Duration(seconds: 20));
+    var response = await fetch();
+    if (response.statusCode == 401 && await _reauthenticate()) {
+      (student, token) = (_studentId!, _token!);
+      response = await fetch();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ClassVivaException(
+          'Impossibile scaricare l’allegato (${response.statusCode}).');
+    }
+    // L'endpoint può restituire il file grezzo oppure un JSON con i byte
+    // in base64 sotto "file".
+    final body = response.bodyBytes;
+    if (body.isNotEmpty && body.first == 0x7B /* '{' */) {
+      try {
+        final decoded = jsonDecode(utf8.decode(body));
+        if (decoded is Map) {
+          final encoded = decoded['file'] ?? decoded['content'];
+          if (encoded is String) {
+            return (
+              fileName: decoded['fileName']?.toString() ??
+                  'allegato-$fileNum',
+              bytes: base64Decode(encoded),
+            );
+          }
+        }
+      } on Object {/* non è JSON: trattalo come binario */}
+    }
+    String fileName = 'allegato-$fileNum';
+    final attachments2 = record.values['attachments'];
+    if (attachments2 is List && index < attachments2.length) {
+      final attach = attachments2[index];
+      if (attach is Map && attach['fileName'] != null) {
+        fileName = attach['fileName'].toString();
+      }
+    }
+    return (fileName: fileName, bytes: body);
+  }
+
+  /// Rimuove tag ed entità HTML dal testo delle comunicazioni.
+  static String _stripHtml(String html) => html
+      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<[^>]*>'), '')
+      .replaceAll('&nbsp;', ' ')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .trim();
 
   List<Map> _recordRows(Object? value) {
     if (value is List) return value.whereType<Map>().toList();
@@ -305,18 +416,24 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
     Map row,
     int index,
   ) {
-    String? first(Iterable<String> keys) {
+    String? first(Iterable<String> keys, [String? except]) {
       for (final key in keys) {
         final value = row[key];
         if (value == null || value.toString().trim().isEmpty) continue;
-        return value.toString().trim();
+        final text = value.toString().trim();
+        if (text == except) continue;
+        return text;
       }
       return null;
     }
 
     final codeTitle = switch (row['evtCode']?.toString()) {
-      'ABA0' => 'Assenza',
-      'ABU0' => 'Ritardo o uscita anticipata',
+      'ABA0' || 'ABA1' => 'Assenza',
+      'ABR0' => 'Ritardo',
+      'ABR1' => 'Ritardo breve',
+      'ABU0' => 'Uscita anticipata',
+      'ABU1' || 'ABRU' => 'Ritardo e uscita anticipata',
+      'ABP0' => 'Presente fuori aula',
       'AGHW' => 'Compiti',
       'AGNT' => 'Agenda',
       _ => null,
@@ -335,6 +452,8 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
           'text',
           'note',
           'notes',
+          'evtText',
+          'noteText',
           'folderName',
           'name',
           'documentName',
@@ -343,6 +462,8 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
         ]) ??
         codeTitle ??
         _sectionLabel(section);
+    // [except] evita che il sottotitolo ripeta il testo già usato come
+    // titolo (es. nelle note, dove evtText diventa il titolo).
     final subtitle = first(const [
           'evtText',
           'description',
@@ -363,7 +484,7 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
           'author',
           'publisher',
           'fileName',
-        ]) ??
+        ], title) ??
         first(const [
           'subjectDesc',
           'subjectName',
@@ -371,7 +492,7 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
           'teacherName',
           'isJustified',
           'status'
-        ]) ??
+        ], title) ??
         '';
     // Per gli eventi con orario (agenda) il giorno corretto è quello
     // locale di evtDatetimeBegin: evtDate può riportare il giorno UTC,
