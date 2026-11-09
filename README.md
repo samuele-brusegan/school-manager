@@ -17,6 +17,8 @@ An offline-first Flutter app to organise the school day: timetable, agenda, grad
 
 MVP in active development. The ClasseViva protocol is reverse-engineered, unofficial and may change; some sections depend on the permissions of the linked profile. A cloud backend and account sync are out of scope. On the web, a stateless HTTP proxy is used to bypass CORS.
 
+**VPNs are not supported**: the ClasseViva API rejects requests routed through VPNs of any kind (typically failing the login with HTTP 501). If you need a VPN on the device, add the app to the VPN's split-tunnel / excluded-apps list so its traffic goes out directly. The login requires the numeric ClasseViva *user code* (not the email used on the website).
+
 ## Architecture
 
 Strict MVC: views render state and forward user intents to controllers; controllers coordinate use cases; the model defines entities, rules and repository contracts. SQLite, secure storage and REST adapters implement the model's interfaces. See [docs/architecture/overview.md](docs/architecture/overview.md).

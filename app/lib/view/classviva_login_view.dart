@@ -27,6 +27,7 @@ class ClassVivaLoginView extends StatefulWidget {
 class _ClassVivaLoginViewState extends State<ClassVivaLoginView> {
   final _username = TextEditingController();
   final _password = TextEditingController();
+  bool _obscurePassword = true;
   bool? _hasSession;
 
   @override
@@ -159,7 +160,7 @@ class _ClassVivaLoginViewState extends State<ClassVivaLoginView> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: _password,
-                    obscureText: true,
+                    obscureText: _obscurePassword,
                     autocorrect: false,
                     enableSuggestions: false,
                     keyboardType: TextInputType.visiblePassword,
@@ -167,9 +168,19 @@ class _ClassVivaLoginViewState extends State<ClassVivaLoginView> {
                     textInputAction: TextInputAction.done,
                     onSubmitted: (_) =>
                         controller.isLoading ? null : _signIn(),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Password',
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
+                      suffixIcon: IconButton(
+                        icon: Icon(_obscurePassword
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined),
+                        tooltip: _obscurePassword
+                            ? 'Mostra password'
+                            : 'Nascondi password',
+                        onPressed: () => setState(() =>
+                            _obscurePassword = !_obscurePassword),
+                      ),
                     ),
                   ),
                 ]),
