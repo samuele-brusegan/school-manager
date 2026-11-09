@@ -16,6 +16,7 @@ import 'model/infrastructure/sqlite_theme_preference_repository.dart';
 import 'model/infrastructure/classviva_rest_gateway.dart';
 import 'model/infrastructure/secure_credential_store.dart';
 import 'model/services/app_analytics.dart';
+import 'model/services/background_sync.dart';
 import 'model/services/import_proposal_builder.dart';
 import 'view/app_palette.dart';
 import 'view/home_page.dart';
@@ -68,6 +69,11 @@ Future<void> main() async {
   );
   schoolDataController
       .setAutoRefreshMinutes(themeController.autoRefreshMinutes);
+  await BackgroundSync.instance.init();
+  await BackgroundSync.instance.configure(
+    enabled: themeController.backgroundSyncEnabled,
+    minutes: themeController.autoRefreshMinutes,
+  );
   final analytics = await AppAnalytics.init();
   runApp(
     SchoolManagerApp(

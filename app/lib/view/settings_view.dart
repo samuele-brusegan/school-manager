@@ -1,7 +1,8 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -15,6 +16,7 @@ import '../model/entities/classroom_resource.dart';
 import '../model/entities/period_time.dart';
 import '../model/entities/subject.dart';
 import '../model/services/app_analytics.dart';
+import '../model/services/background_sync.dart';
 import '../model/services/distinct_subject_color_selector.dart';
 import '../util/text_file_download.dart';
 import 'app_palette.dart';
@@ -579,7 +581,9 @@ class _ClasseVivaPage extends StatelessWidget {
               title: const Text('Intervallo di aggiornamento'),
               subtitle: Text(themeController.autoRefreshMinutes <= 0
                   ? 'Disattivato'
-                  : 'Ogni ${themeController.autoRefreshMinutes} minuti'),
+                  : themeController.autoRefreshMinutes == 1440
+                      ? 'Ogni 24 ore'
+                      : 'Ogni ${themeController.autoRefreshMinutes} minuti'),
               trailing: DropdownButton<int>(
                 value: themeController.autoRefreshMinutes,
                 items: const [
@@ -588,15 +592,47 @@ class _ClasseVivaPage extends StatelessWidget {
                   DropdownMenuItem(value: 15, child: Text('15 min')),
                   DropdownMenuItem(value: 30, child: Text('30 min')),
                   DropdownMenuItem(value: 60, child: Text('1 ora')),
+                  DropdownMenuItem(value: 1440, child: Text('24 ore')),
                 ],
                 onChanged: (value) {
                   if (value == null) return;
                   themeController.setAutoRefreshMinutes(value);
                   schoolDataController.setAutoRefreshMinutes(value);
+                  BackgroundSync.instance.configure(
+                    enabled: themeController.backgroundSyncEnabled,
+                    minutes: value,
+                  );
                 },
               ),
             ),
           ),
+          if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+            Card(
+              child: SwitchListTile.adaptive(
+                secondary: const Icon(Icons.notifications_active_outlined),
+                title: const Text('Aggiornamento in background'),
+                subtitle: const Text(
+                    'Controlla il registro anche ad app chiusa e notifica '
+                    'compiti, circolari, voti e note nuovi.'),
+                value: themeController.backgroundSyncEnabled,
+                onChanged: (enabled) async {
+                  if (enabled) {
+                    final granted = await BackgroundSync.instance
+                        .requestNotificationPermission();
+                    if (!granted && context.mounted) {
+                      showAppMessage(context,
+                          'Permesso notifiche negato: attivalo nelle '
+                          'impostazioni di sistema.');
+                    }
+                  }
+                  await themeController.setBackgroundSyncEnabled(enabled);
+                  await BackgroundSync.instance.configure(
+                    enabled: enabled,
+                    minutes: themeController.autoRefreshMinutes,
+                  );
+                },
+              ),
+            ),
           const SizedBox(height: 16),
           const _SettingsSectionHeader(
               icon: Icons.how_to_reg_outlined,

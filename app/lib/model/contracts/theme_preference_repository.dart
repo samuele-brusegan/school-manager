@@ -24,6 +24,10 @@ abstract interface class ThemePreferenceRepository {
   Future<double?> getDefaultGradeTarget();
   Future<void> saveDefaultGradeTarget(double? target);
 
+  /// Sincronizzazione periodica in background con notifiche locali.
+  Future<bool> getBackgroundSyncEnabled();
+  Future<void> saveBackgroundSyncEnabled(bool enabled);
+
   /// Mostra la percentuale di assenze nella pagina Presenze.
   Future<bool> getShowAttendanceRate();
   Future<void> saveShowAttendanceRate(bool enabled);

@@ -168,6 +168,27 @@ class SqliteThemePreferenceRepository implements ThemePreferenceRepository {
   }
 
   @override
+  Future<bool> getBackgroundSyncEnabled() async {
+    final rows = await _database.query(
+      'app_settings',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['background_sync_enabled'],
+      limit: 1,
+    );
+    return rows.isNotEmpty && rows.single['value'] == 'true';
+  }
+
+  @override
+  Future<void> saveBackgroundSyncEnabled(bool enabled) async {
+    await _database.insert(
+      'app_settings',
+      {'key': 'background_sync_enabled', 'value': enabled.toString()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
   Future<bool> getShowAttendanceRate() async {
     final rows = await _database.query(
       'app_settings',

@@ -29,6 +29,9 @@ class ThemeController extends ChangeNotifier {
   double? targetFor(String subject) =>
       gradeTargets[subject] ?? defaultGradeTarget;
 
+  /// Sincronizzazione periodica in background con notifiche (Android).
+  bool backgroundSyncEnabled = false;
+
   /// Mostra la percentuale di assenze nella pagina Presenze.
   bool showAttendanceRate = true;
 
@@ -43,6 +46,7 @@ class ThemeController extends ChangeNotifier {
     weekendMode = await _repository.getWeekendMode();
     debugMode = await _repository.getDebugMode();
     autoRefreshMinutes = await _repository.getAutoRefreshMinutes();
+    backgroundSyncEnabled = await _repository.getBackgroundSyncEnabled();
     gradeTargets = await _repository.getGradeTargets();
     defaultGradeTarget = await _repository.getDefaultGradeTarget();
     showAttendanceRate = await _repository.getShowAttendanceRate();
@@ -76,6 +80,13 @@ class ThemeController extends ChangeNotifier {
     if (autoRefreshMinutes == minutes) return;
     await _repository.saveAutoRefreshMinutes(minutes);
     autoRefreshMinutes = minutes;
+    notifyListeners();
+  }
+
+  Future<void> setBackgroundSyncEnabled(bool enabled) async {
+    if (backgroundSyncEnabled == enabled) return;
+    await _repository.saveBackgroundSyncEnabled(enabled);
+    backgroundSyncEnabled = enabled;
     notifyListeners();
   }
 
