@@ -5,11 +5,14 @@ import '../controller/theme_controller.dart';
 import '../controller/timetable_controller.dart';
 import '../model/contracts/classviva_data_gateway.dart';
 import '../model/entities/classviva_record.dart';
+import '../model/entities/lesson.dart';
 import '../model/entities/study_task.dart';
 import '../model/entities/subject.dart';
 import '../model/entities/timetable.dart';
 import '../model/services/subject_matcher.dart';
 import 'debug_metadata_view.dart';
+import 'linked_text.dart';
+import 'task_editor.dart';
 
 enum _AgendaMode { list, day, week, month }
 
@@ -208,6 +211,10 @@ class _AgendaViewState extends State<AgendaView> {
   /// (settimana su schermi ampi, giorno sul telefono).
   _AgendaMode? _mode;
   DateTime _selectedDate = _dateOnly(DateTime.now());
+
+  /// Se vero, gli URL nel testo dei dettagli sono compressi in "LINK"
+  /// cliccabili; disattivabile dalla card espansa dell'evento.
+  bool _compactLinks = true;
 
   /// Swipe orizzontale tra periodi: ogni pagina mostra il giorno, la
   /// settimana o il mese spostato di (indice - _pageAnchor) rispetto a
@@ -682,49 +689,59 @@ class _AgendaViewState extends State<AgendaView> {
             child: allDay || compact
                 ? Text(
                     entry.compactLabel,
-                    maxLines: compact ? 2 : 1,
+                    maxLines: compact && !allDay ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         color: foreground,
                         fontSize: compact ? 10 : 12,
                         fontWeight: FontWeight.w600),
                   )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        entry.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            color: foreground,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700),
-                      ),
-                      if (entry.teacherName != null)
+                : LayoutBuilder(builder: (context, box) {
+                    // Blocchi troppo bassi mostrano solo le righe che
+                    // ci stanno: prima la materia, poi il docente e
+                    // infine il testo dell'evento.
+                    final showTeacher = box.maxHeight >= 38 &&
+                        entry.teacherName != null;
+                    final body = _entryBody(entry);
+                    final showBody =
+                        body != null && box.maxHeight >= (showTeacher ? 52 : 34);
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          entry.teacherName!,
+                          entry.label,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style:
-                              TextStyle(color: foreground, fontSize: 11),
+                          style: TextStyle(
+                              color: foreground,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700),
                         ),
-                      // Testo del compito/evento: spesso coincide con il
-                      // titolo (es. i "notes" dei compiti AGHW), quindi si
-                      // mostra il primo tra contenuto e titolo diverso
-                      // dall'etichetta di materia.
-                      if (_entryBody(entry) != null)
-                        Expanded(
-                          child: Text(
-                            _entryBody(entry)!,
-                            maxLines: 4,
+                        if (showTeacher)
+                          Text(
+                            entry.teacherName!,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style:
                                 TextStyle(color: foreground, fontSize: 11),
                           ),
-                        ),
-                    ],
-                  ),
+                        // Testo del compito/evento: spesso coincide con il
+                        // titolo (es. i "notes" dei compiti AGHW), quindi si
+                        // mostra il primo tra contenuto e titolo diverso
+                        // dall'etichetta di materia.
+                        if (showBody)
+                          Expanded(
+                            child: Text(
+                              body,
+                              maxLines: 4,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  TextStyle(color: foreground, fontSize: 11),
+                            ),
+                          ),
+                      ],
+                    );
+                  }),
           ),
         ),
       ),
@@ -750,9 +767,10 @@ class _AgendaViewState extends State<AgendaView> {
     ].join(', ');
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(entry.title),
-        content: Column(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(entry.title),
+          content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -776,12 +794,34 @@ class _AgendaViewState extends State<AgendaView> {
               _detailRow(context, Icons.schedule_outlined, 'Quando', when),
             if (entry.content != null && entry.content != entry.title) ...[
               const SizedBox(height: 12),
-              Text('Contenuto',
-                  style: Theme.of(context).textTheme.labelLarge),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('Contenuto',
+                        style: Theme.of(context).textTheme.labelLarge),
+                  ),
+                  if (urlPattern.hasMatch(entry.content!))
+                    IconButton(
+                      tooltip: _compactLinks
+                          ? 'Mostra i link per esteso'
+                          : 'Abbrevia i link',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(_compactLinks
+                          ? Icons.link_off
+                          : Icons.link,
+                          size: 18),
+                      onPressed: () => setDialogState(
+                          () => _compactLinks = !_compactLinks),
+                    ),
+                ],
+              ),
               const SizedBox(height: 4),
               Flexible(
                 child: SingleChildScrollView(
-                  child: Text(entry.content!),
+                  child: LinkedText(
+                    entry.content!,
+                    compact: _compactLinks,
+                  ),
                 ),
               ),
             ],
@@ -802,6 +842,15 @@ class _AgendaViewState extends State<AgendaView> {
           ],
         ),
         actions: [
+          if (entry.task != null)
+            TextButton.icon(
+              onPressed: () {
+                Navigator.pop(context);
+                _editTask(context, entry.task!);
+              },
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Modifica'),
+            ),
           TextButton.icon(
             onPressed: () {
               widget.controller.setTestFlag(entry.id, !entry.isTest);
@@ -819,8 +868,31 @@ class _AgendaViewState extends State<AgendaView> {
             child: const Text('Chiudi'),
           ),
         ],
+        ),
       ),
     );
+  }
+
+  /// Modifica un compito personale esistente tramite l'editor
+  /// condiviso (titolo, materia, scadenza).
+  Future<void> _editTask(BuildContext context, StudyTask task) async {
+    final timetable = widget.timetableController.timetable;
+    final draft = await showTaskEditor(
+      context,
+      subjects: timetable?.subjects ?? const <Subject>[],
+      lessons: timetable?.lessons ?? const <Lesson>[],
+      initial: task,
+    );
+    if (draft == null || draft.title.trim().isEmpty) return;
+    await widget.controller.updateTask(StudyTask(
+      id: task.id,
+      title: draft.title.trim(),
+      subject: draft.subject,
+      dueDate: draft.dueDate,
+      startMinute: draft.startMinute,
+      endMinute: draft.endMinute,
+      isDone: task.isDone,
+    ));
   }
 
   Widget _detailRow(
@@ -1062,17 +1134,26 @@ class _AgendaViewState extends State<AgendaView> {
             Text([
               if (task.subject.isNotEmpty) task.subject,
               _agendaShortDate(task.dueDate),
+              if (task.startMinute != null)
+                '${_minutes(task.startMinute!)}${task.endMinute != null ? ' – ${_minutes(task.endMinute!)}' : ''}',
             ].join(' • ')),
             if (debug)
               DebugInfoText(
                   'task id: ${task.id}  done: ${task.isDone}  subject: "${task.subject}"\nmatched: ${entry.subject?.name ?? '-'} (${entry.subject?.id ?? '-'})  isTest: ${entry.isTest}'),
           ],
         ),
-        secondary: IconButton(
-          tooltip: 'Elimina compito',
-          onPressed: () => widget.controller.deleteTask(task.id),
-          icon: const Icon(Icons.delete_outline),
-        ),
+        secondary: Row(mainAxisSize: MainAxisSize.min, children: [
+          IconButton(
+            tooltip: 'Modifica compito',
+            onPressed: () => _editTask(context, task),
+            icon: const Icon(Icons.edit_outlined),
+          ),
+          IconButton(
+            tooltip: 'Elimina compito',
+            onPressed: () => widget.controller.deleteTask(task.id),
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ]),
       );
     }
     return ListTile(
@@ -1199,10 +1280,16 @@ class _AgendaEntry {
   DateTime? get _begin => record?.begin;
   DateTime? get _end => record?.end;
 
-  int? get beginMinute =>
-      _begin == null ? null : _begin!.hour * 60 + _begin!.minute;
-  int? get endMinute =>
-      _end == null ? null : _end!.hour * 60 + _end!.minute;
+  int? get beginMinute => task != null
+      ? task!.startMinute
+      : _begin == null
+          ? null
+          : _begin!.hour * 60 + _begin!.minute;
+  int? get endMinute => task != null
+      ? task!.endMinute
+      : _end == null
+          ? null
+          : _end!.hour * 60 + _end!.minute;
 
   /// ClasseViva marca gli eventi giornalieri come 00:00–23:59:
   /// vanno nella striscia "tutto il giorno", non nella griglia oraria.

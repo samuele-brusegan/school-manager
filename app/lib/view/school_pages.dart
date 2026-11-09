@@ -17,6 +17,9 @@ import 'agenda_view.dart';
 import 'app_palette.dart';
 import 'attachment_viewer.dart';
 import 'debug_metadata_view.dart';
+import 'formatters.dart';
+import 'linked_text.dart';
+import 'task_editor.dart';
 export 'agenda_view.dart';
 
 class HomeView extends StatelessWidget {
@@ -205,6 +208,10 @@ class HomeView extends StatelessWidget {
                           fallbackSubjectName: record.subjectName,
                           date: record.date,
                           record: record,
+                          subjects:
+                              timetable?.subjects ?? const <Subject>[],
+                          lessons:
+                              timetable?.lessons ?? const <Lesson>[],
                           debug: debug,
                         ),
                       ),
@@ -272,6 +279,10 @@ class HomeView extends StatelessWidget {
                           date: item.date,
                           record: item.record,
                           task: item.task,
+                          subjects:
+                              timetable?.subjects ?? const <Subject>[],
+                          lessons:
+                              timetable?.lessons ?? const <Lesson>[],
                           debug: debug,
                         ),
                       ),
@@ -1129,6 +1140,8 @@ Future<void> _showDetails(
   DateTime? date,
   ClassVivaRecord? record,
   StudyTask? task,
+  List<Subject> subjects = const [],
+  List<Lesson> lessons = const [],
   bool debug = false,
 }) {
   final subjectName = subject?.name ?? fallbackSubjectName;
@@ -1136,6 +1149,10 @@ Future<void> _showDetails(
     if (subjectName != null && subjectName.isNotEmpty)
       ('Materia', subjectName),
     if (date != null) ('Data', _longDate(date)),
+    if (task?.startMinute case final start?) (
+      'Orario',
+      '${formatClock(start)}${task?.endMinute != null ? ' – ${formatClock(task!.endMinute!)}' : ''}'
+    ),
     if (record?.teacherName case final teacher? when teacher.isNotEmpty)
       ('Docente', teacher),
     if (record?.typeLabel case final type? when type.isNotEmpty)
@@ -1148,54 +1165,101 @@ Future<void> _showDetails(
         when content.isNotEmpty && content != title)
       ('Dettagli', content),
   ];
+  var compactLinks = true;
   return showDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: Text(title),
-      content: rows.isEmpty
-          ? const Text('Nessun dettaglio disponibile.')
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final (label, value) in rows)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(label,
-                            style: Theme.of(context).textTheme.labelSmall),
-                        Text(value),
-                      ],
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: Text(title),
+        content: rows.isEmpty
+            ? const Text('Nessun dettaglio disponibile.')
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final (label, value) in rows)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Expanded(
+                              child: Text(label,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall),
+                            ),
+                            if (urlPattern.hasMatch(value))
+                              IconButton(
+                                tooltip: compactLinks
+                                    ? 'Mostra i link per esteso'
+                                    : 'Abbrevia i link',
+                                visualDensity: VisualDensity.compact,
+                                icon: Icon(
+                                    compactLinks
+                                        ? Icons.link_off
+                                        : Icons.link,
+                                    size: 18),
+                                onPressed: () => setDialogState(
+                                    () => compactLinks = !compactLinks),
+                              ),
+                          ]),
+                          LinkedText(value, compact: compactLinks),
+                        ],
+                      ),
                     ),
-                  ),
-                if (debug) ...[
-                  const Divider(height: 20),
-                  if (record != null)
-                    DebugInfoText(debugRecordText(record)),
-                  if (task != null)
+                  if (debug) ...[
+                    const Divider(height: 20),
+                    if (record != null)
+                      DebugInfoText(debugRecordText(record)),
+                    if (task != null)
+                      DebugInfoText(
+                          'task id: ${task.id}  done: ${task.isDone}  subject: "${task.subject}"'),
                     DebugInfoText(
-                        'task id: ${task.id}  done: ${task.isDone}  subject: "${task.subject}"'),
-                  DebugInfoText(
-                      'matched subject: ${subject?.name ?? '-'} (id: ${subject?.id ?? '-'}, classviva_id: ${subject?.classvivaId ?? '-'})'),
+                        'matched subject: ${subject?.name ?? '-'} (id: ${subject?.id ?? '-'}, classviva_id: ${subject?.classvivaId ?? '-'})'),
+                  ],
                 ],
-              ],
+              ),
+        actions: [
+          if (task != null)
+            TextButton.icon(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                final draft = await showTaskEditor(
+                  context,
+                  subjects: subjects,
+                  lessons: lessons,
+                  initial: task,
+                );
+                if (draft == null || draft.title.trim().isEmpty) return;
+                await controller.updateTask(StudyTask(
+                  id: task.id,
+                  title: draft.title.trim(),
+                  subject: draft.subject,
+                  dueDate: draft.dueDate,
+                  startMinute: draft.startMinute,
+                  endMinute: draft.endMinute,
+                  isDone: task.isDone,
+                ));
+              },
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Modifica'),
             ),
-      actions: [
-        if (task != null)
-          FilledButton.tonal(
-            onPressed: () {
-              controller.toggleTask(task);
-              Navigator.of(context).pop();
-            },
-            child: const Text('Segna come completato'),
+          if (task != null)
+            FilledButton.tonal(
+              onPressed: () {
+                controller.toggleTask(task);
+                Navigator.of(context).pop();
+              },
+              child: const Text('Segna come completato'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Chiudi'),
           ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Chiudi'),
-        ),
-      ],
+        ],
+      ),
     ),
   );
 }

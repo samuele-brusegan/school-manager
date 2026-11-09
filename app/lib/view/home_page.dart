@@ -16,6 +16,7 @@ import 'welcome_dialog.dart';
 import 'classviva_import_page.dart';
 import 'school_pages.dart';
 import 'settings_view.dart';
+import 'task_editor.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -212,66 +213,21 @@ class _HomePageState extends State<HomePage> {
       );
 
   Future<void> _addTask(BuildContext context) async {
-    final title = TextEditingController();
-    final subject = TextEditingController();
-    var dueDate = DateTime.now();
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Nuovo compito'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-              controller: title,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: 'Compito'),
-            ),
-            TextField(
-              controller: subject,
-              decoration:
-                  const InputDecoration(labelText: 'Materia (facoltativa)'),
-            ),
-            const SizedBox(height: 8),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.event_outlined),
-              title: const Text('Scadenza'),
-              subtitle: Text(
-                  '${dueDate.day.toString().padLeft(2, '0')}/${dueDate.month.toString().padLeft(2, '0')}/${dueDate.year}'),
-              onTap: () async {
-                final chosen = await showDatePicker(
-                  context: context,
-                  initialDate: dueDate,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime(2100),
-                );
-                if (chosen != null) setDialogState(() => dueDate = chosen);
-              },
-            ),
-          ]),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Annulla'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Salva'),
-            ),
-          ],
-        ),
-      ),
+    final timetable = widget.timetableController.timetable;
+    final draft = await showTaskEditor(
+      context,
+      subjects: timetable?.subjects ?? const <Subject>[],
+      lessons: timetable?.lessons ?? const <Lesson>[],
     );
-    if (result == true && title.text.trim().isNotEmpty) {
-      await widget.schoolDataController.addTask(
-        title: title.text,
-        subject: subject.text,
-        dueDate: dueDate,
-      );
-      widget.analytics.event('add_task');
-    }
-    title.dispose();
-    subject.dispose();
+    if (draft == null || draft.title.trim().isEmpty) return;
+    await widget.schoolDataController.addTask(
+      title: draft.title,
+      subject: draft.subject,
+      dueDate: draft.dueDate,
+      startMinute: draft.startMinute,
+      endMinute: draft.endMinute,
+    );
+    widget.analytics.event('add_task');
   }
 
   Future<void> _addLesson(BuildContext context,

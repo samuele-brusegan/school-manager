@@ -304,7 +304,7 @@ class SqliteTimetableRepository implements TimetableRepository {
 
 Future<Database> openTimetableDatabase(String path) => openDatabase(
       path,
-      version: 11,
+      version: 12,
       onCreate: (database, version) async {
         await database.execute(
           "CREATE TABLE subjects(id TEXT PRIMARY KEY, name TEXT NOT NULL, color_value INTEGER NOT NULL, classviva_id TEXT NOT NULL DEFAULT '', teachers_json TEXT NOT NULL DEFAULT '[]', rooms_json TEXT NOT NULL DEFAULT '[]')",
@@ -320,7 +320,7 @@ Future<Database> openTimetableDatabase(String path) => openDatabase(
         await database.execute(
             'CREATE TABLE classviva_cache(section TEXT PRIMARY KEY, records_json TEXT NOT NULL, fetched_at TEXT NOT NULL)');
         await database.execute(
-            'CREATE TABLE study_tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_date TEXT NOT NULL, subject TEXT NOT NULL DEFAULT \'\', is_done INTEGER NOT NULL DEFAULT 0)');
+            'CREATE TABLE study_tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_date TEXT NOT NULL, subject TEXT NOT NULL DEFAULT \'\', start_minute INTEGER, end_minute INTEGER, is_done INTEGER NOT NULL DEFAULT 0)');
         await database.execute(
             'CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
         await database.execute(
@@ -360,7 +360,7 @@ Future<Database> openTimetableDatabase(String path) => openDatabase(
           await database.execute(
               'CREATE TABLE classviva_cache(section TEXT PRIMARY KEY, records_json TEXT NOT NULL, fetched_at TEXT NOT NULL)');
           await database.execute(
-              'CREATE TABLE study_tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_date TEXT NOT NULL, subject TEXT NOT NULL DEFAULT \'\', is_done INTEGER NOT NULL DEFAULT 0)');
+              'CREATE TABLE study_tasks(id TEXT PRIMARY KEY, title TEXT NOT NULL, due_date TEXT NOT NULL, subject TEXT NOT NULL DEFAULT \'\', start_minute INTEGER, end_minute INTEGER, is_done INTEGER NOT NULL DEFAULT 0)');
         }
         if (oldVersion < 7) {
           await database.execute(
@@ -386,6 +386,16 @@ Future<Database> openTimetableDatabase(String path) => openDatabase(
           if (columns.every((column) => column['name'] != 'meta_json')) {
             await database.execute(
                 "ALTER TABLE classroom_resources ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'");
+          }
+        }
+        if (oldVersion < 12) {
+          final columns =
+              await database.rawQuery('PRAGMA table_info(study_tasks)');
+          if (columns.every((column) => column['name'] != 'start_minute')) {
+            await database.execute(
+                'ALTER TABLE study_tasks ADD COLUMN start_minute INTEGER');
+            await database.execute(
+                'ALTER TABLE study_tasks ADD COLUMN end_minute INTEGER');
           }
         }
       },

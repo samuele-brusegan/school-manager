@@ -156,6 +156,8 @@ class SchoolDataController extends ChangeNotifier {
     required String title,
     required DateTime dueDate,
     String subject = '',
+    int? startMinute,
+    int? endMinute,
   }) async {
     final cleanTitle = title.trim();
     if (cleanTitle.isEmpty) return;
@@ -164,7 +166,17 @@ class SchoolDataController extends ChangeNotifier {
       title: cleanTitle,
       dueDate: dueDate,
       subject: subject.trim(),
+      startMinute: startMinute,
+      endMinute: endMinute,
     );
+    await _repository.saveTask(task);
+    tasks = await _repository.getTasks();
+    notifyListeners();
+  }
+
+  /// Aggiorna titolo, materia o scadenza di un compito personale
+  /// esistente (mantenendo id e stato di completamento).
+  Future<void> updateTask(StudyTask task) async {
     await _repository.saveTask(task);
     tasks = await _repository.getTasks();
     notifyListeners();
@@ -176,6 +188,8 @@ class SchoolDataController extends ChangeNotifier {
       title: task.title,
       dueDate: task.dueDate,
       subject: task.subject,
+      startMinute: task.startMinute,
+      endMinute: task.endMinute,
       isDone: !task.isDone,
     );
     await _repository.saveTask(updated);
