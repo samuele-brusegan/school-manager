@@ -43,7 +43,7 @@ class ClassVivaRecord {
   String? get typeLabel {
     final code = values['evtCode']?.toString().trim().toUpperCase();
     return switch (code) {
-      'AGHW' => 'Compiti',
+      'AGHW' || 'NEWDC' => 'Compiti',
       'AGNT' => 'Note',
       'AGCR' => 'Altro evento',
       '' || null => null,

@@ -225,7 +225,7 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
     final decoded = jsonDecode(response.body);
     final rows = _recordRows(decoded).expand(_flattenNestedRecord).toList();
     final label = _sectionLabel(section);
-    return [
+    final loaded = [
       for (var index = 0; index < rows.length; index++)
         _recordFromMap(section, rows[index], index),
         // Scarta i record fantasma senza alcun contenuto: righe vuote o
@@ -235,6 +235,119 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
         record.title != label ||
         record.subtitle.isNotEmpty ||
         record.date != null).toList();
+    if (section == ClassVivaSection.agenda) {
+      loaded.addAll(await _homeworkRecords(
+        student,
+        token,
+        start: start,
+        end: end,
+      ));
+    }
+    return loaded;
+  }
+
+  /// Compiti del nuovo registro ("Compiti" dell'app ClasseViva): gli
+  /// eventi con evtCode NEWDC non compaiono in `agenda/all`, che
+  /// restituisce solo i vecchi compiti AGHW. Alcune scuole disabilitano
+  /// l'endpoint dedicato `homeworks` (404 "school management
+  /// policies"); in quel caso si ripiega su `overview/all`, che include
+  /// gli stessi compiti sotto la chiave `homeworks`. Gli errori si
+  /// traducono in lista vuota per non bloccare l'agenda.
+  Future<List<ClassVivaRecord>> _homeworkRecords(
+    String student,
+    String token, {
+    DateTime? start,
+    DateTime? end,
+  }) async {
+    var items =
+        await _fetchHomeworkItems('v1/students/$student/homeworks', token);
+    if (items.isEmpty && start != null && end != null) {
+      items = await _overviewHomeworks(student, token, start, end);
+    }
+    return [
+      for (var index = 0; index < items.length; index++)
+        _recordFromMap(
+            ClassVivaSection.agenda, _homeworkRow(items[index]), index),
+    ];
+  }
+
+  /// Compiti dalla panoramica `overview/all`. L'endpoint rifiuta
+  /// intervalli che superano l'effettiva fine dell'anno scolastico
+  /// (404 "invalid date range"): se la richiesta fallisce si ritenta
+  /// con il 30 giugno, sufficiente per i compiti dell'anno in corso.
+  Future<List<Map>> _overviewHomeworks(
+      String student, String token, DateTime start, DateTime end) async {
+    String path(DateTime last) =>
+        'v1/students/$student/overview/all'
+        '/${_datePath(start)}/${_datePath(last)}';
+    var items = await _fetchHomeworkItems(path(end), token);
+    final juneEnd = DateTime(end.year, 6, 30);
+    if (items.isEmpty && end.isAfter(juneEnd)) {
+      items = await _fetchHomeworkItems(path(juneEnd), token);
+    }
+    return items;
+  }
+
+  /// GET di un endpoint che espone i compiti sotto la chiave
+  /// `homeworks` (o `items`); ogni errore (rete, HTTP, JSON) vale una
+  /// lista vuota.
+  Future<List<Map>> _fetchHomeworkItems(String path, String token) async {
+    http.Response response;
+    try {
+      response = await _client
+          .get(_baseUri.resolve(path),
+              headers: {..._headers, 'Z-Auth-Token': token})
+          .timeout(const Duration(seconds: 15));
+      _debugResponse(path, response);
+    } on Object {
+      return const [];
+    }
+    if (response.statusCode != 200) return const [];
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) return const [];
+      return [decoded['homeworks'], decoded['items']]
+          .whereType<List>()
+          .expand((list) => list.whereType<Map>())
+          .toList();
+    } on Object {
+      return const [];
+    }
+  }
+
+  /// Adatta un elemento di `homeworks/index` allo schema atteso da
+  /// [_recordFromMap]: ID in namespace proprio (possono collidere con
+  /// gli evtId di agenda), data di scadenza come giorno dell'evento e
+  /// expiryTime convertito in `evtDatetimeBegin` UTC.
+  Map _homeworkRow(Map item) {
+    final row = <String, Object?>{
+      for (final entry in item.entries)
+        entry.key.toString() == 'evtId'
+            ? 'homeworkEvtId'
+            : entry.key.toString(): entry.value,
+      'id': 'compito-${item['evtId']}',
+      'evtCode': 'NEWDC',
+      // Senza titolo proprio, il parser userebbe homeworkDesc come
+      // titolo: il testo (con eventuali link) finirebbe nella testata
+      // invece che nel corpo linkificato della card di dettaglio.
+      if ('${item['subjectDesc'] ?? ''}'.isNotEmpty)
+        'title': item['subjectDesc'],
+    };
+    final expiry = '${item['expiryDate'] ?? ''}';
+    if (expiry.isNotEmpty) row['evtDate'] = expiry;
+    final date = DateTime.tryParse(expiry);
+    final time = '${item['expiryTime'] ?? ''}'.split(':');
+    final hour = int.tryParse(time.isNotEmpty ? time.first : '');
+    final minute = time.length > 1 ? int.tryParse(time[1]) ?? 0 : 0;
+    if (date != null && hour != null && hour >= 0 && hour < 24) {
+      // Gli orari del registro compiti sono locali: la stringa UTC con
+      // 'Z' fa sì che il parser li riconverta correttamente in locale.
+      row['evtDatetimeBegin'] =
+          DateTime(date.year, date.month, date.day, hour, minute)
+              .toUtc()
+              .toIso8601String();
+    }
+    return row;
   }
 
   @override
@@ -434,7 +547,7 @@ class ClassVivaRestGateway implements ClassVivaGateway, ClassVivaDataGateway {
       'ABU0' => 'Uscita anticipata',
       'ABU1' || 'ABRU' => 'Ritardo e uscita anticipata',
       'ABP0' => 'Presente fuori aula',
-      'AGHW' => 'Compiti',
+      'AGHW' || 'NEWDC' => 'Compiti',
       'AGNT' => 'Agenda',
       _ => null,
     };
